@@ -2,7 +2,7 @@
   "name": "vscode-game-csv-viewer",
   "displayName": "Game CSV Viewer",
   "description": "%description%",
-  "version": "0.1.25",
+  "version": "0.1.27",
   "publisher": "sugyeongkimdev",
   "icon": "media/icon.png",
   "preview": true,
@@ -236,7 +236,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node --test tests/*.test.js",
-    "package": "npx @vscode/vsce package --no-rewrite-relative-links"
+    "package": "npx @vscode/vsce package"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
