@@ -1,0 +1,1012 @@
+// 표 화면. 보이는 행만 그리고, 셀 고르기, 셀 고치기, 키보드 이동, 복사와 붙여 넣기, 열과 행 크기 조절, 확대와 축소를 맡는다.
+// 파일 글자는 확장 쪽이 들고 있다. import가 없는 일반 스크립트로 컴파일되어 웹뷰에서 그대로 읽힌다.
+
+declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(state: unknown): void };
+
+/** 탭을 옮겼다 와도 이어지게 웹뷰 상태에 두는 값. 머리글 고정은 확장 설정, 크기와 배율은 확장 저장소가 기억한다. */
+interface ViewState {
+    row: number;
+    col: number;
+    top: number;
+    left: number;
+}
+
+interface Pos {
+    row: number;
+    col: number;
+}
+
+/** 네모 범위: [첫 행, 첫 열, 끝 행, 끝 열] */
+type Rect = [number, number, number, number];
+/** 끌어서 고를 때의 단위: 셀, 행 전체, 열 전체 */
+type DragMode = 'cell' | 'row' | 'col';
+/** 머리글 고정 방식: 첫 행(가로), 첫 열(세로), 없음 */
+type HeaderMode = 'row' | 'column' | 'none';
+const isHeaderMode = (v: unknown): v is HeaderMode => v === 'row' || v === 'column' || v === 'none';
+
+/** 끌어서 크기를 바꾸는 중인 열이나 행. base는 배율 100% 기준 처음 크기다. */
+interface Resize {
+    kind: 'col' | 'row';
+    targets: number[];
+    start: number;
+    base: number;
+}
+
+const vscodeApi = acquireVsCodeApi();
+const saved = (vscodeApi.getState() ?? {}) as Partial<ViewState>;
+
+/** 기본 행 높이(배율 100% 기준 px) */
+const BASE_ROW_H = 22;
+/** 배율 단계. view.ts의 ZOOMS와 같아야 한다. */
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+/** 열 너비, 행 높이의 범위(배율 100% 기준 px). view.ts의 같은 이름 값과 같아야 한다. */
+const COL_W_MIN = 20;
+const COL_W_MAX = 2000;
+const ROW_H_MIN = 12;
+const ROW_H_MAX = 400;
+/** 열 이름 경계를 두 번 눌러 내용에 맞출 때의 최대 너비 */
+const FIT_MAX = 1000;
+/** 찾기 결과를 셀 번호 하나로 묶을 때 쓰는 열 자리 수(행 x FIND_KEY + 열). 열이 이보다 많으면 안 된다. */
+const FIND_KEY = 65536;
+/** 찾기 결과 상한. 넘으면 개수 뒤에 +를 붙인다. */
+const FIND_MAX = 100000;
+/** 화면 위아래로 미리 더 그려 둘 행 수 */
+const OVERSCAN = 8;
+/** 셀 글자가 너무 길면 앞부분만 그린다. */
+const SHOW_MAX = 300;
+
+const grid = document.getElementById('grid') as HTMLDivElement;
+const table = document.getElementById('table') as HTMLTableElement;
+const editor = document.getElementById('editor') as HTMLTextAreaElement;
+const modeLabel = document.getElementById('modeLabel') as HTMLSpanElement;
+const modeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#mode button'));
+const zoomButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#zoom button'));
+const zoomPct = document.getElementById('zoomPct') as HTMLButtonElement;
+const emptyNote = document.getElementById('empty') as HTMLDivElement;
+const addrText = document.getElementById('addr') as HTMLSpanElement;
+const selText = document.getElementById('selinfo') as HTMLSpanElement;
+const noteText = document.getElementById('note') as HTMLSpanElement;
+const sizeText = document.getElementById('size') as HTMLSpanElement;
+const findBox = document.getElementById('find') as HTMLDivElement;
+const findInput = document.getElementById('findInput') as HTMLInputElement;
+const findCount = document.getElementById('findCount') as HTMLSpanElement;
+const findButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#find button'));
+const ruler = document.createElement('canvas').getContext('2d') as CanvasRenderingContext2D;
+/** 배율 100%일 때의 글자 크기와 글꼴(VS Code 편집기 글꼴) */
+const baseFont = parseFloat(getComputedStyle(document.body).fontSize) || 13;
+const fontFamily = getComputedStyle(document.body).fontFamily;
+
+/** 화면 글자 목록. 확장이 `text` 메시지로 보내 준다(i18n.ts). 받기 전에는 아래 임시 글자를 쓴다. */
+let text: Record<string, string> = { size: '{rows} x {cols}', selected: '{n}', multiCopy: '', selectAll: '' };
+let rows: string[][] = [];
+let colCount = 0;
+/** 확장이 HTML에 처음 값을 넣어 두고, 설정이 바뀌면 `mode` 메시지로 알려 준다. */
+let mode: HeaderMode = isHeaderMode(document.body.dataset.mode) ? document.body.dataset.mode : 'row';
+
+// 크기와 배율. 확장이 `view` 메시지로 기억해 둔 값을 보내 주고, 바뀌면 `saveView`로 돌려보낸다.
+let zoom = 1;
+/** 사용자가 바꾼 열 너비, 행 높이(배율 100% 기준 px). 없는 번호는 자동 너비, 기본 높이다. */
+let colW: Record<number, number> = {};
+let rowHt: Record<number, number> = {};
+/** 내용을 보고 정한 열 너비(배율 100% 기준) */
+let autoW: number[] = [];
+let numWBase = 40;
+// 아래는 layout()이 위 값과 배율로 계산하는 실제 화면 크기(px)다.
+let widths: number[] = [];
+let numW = 40;
+/** 본문 행 k의 위쪽 위치. tops[k + 1] - tops[k]가 그 행의 높이다. */
+let tops = new Float64Array(1);
+let layoutDirty = true;
+
+/** 지금 셀: 타자가 들어가는 셀 */
+let sel: Pos = { row: saved.row ?? 0, col: saved.col ?? 0 };
+/** 지금 범위의 시작 셀과 움직이는 끝 셀. 범위는 이 두 셀을 꼭짓점으로 하는 네모다. */
+let anchor: Pos = { ...sel };
+let head: Pos = { ...sel };
+/** Ctrl+클릭으로 앞서 고른 범위들 */
+let extra: Rect[] = [];
+let drag: DragMode | null = null;
+let resizing: Resize | null = null;
+let editing = false;
+let loaded = false;
+let frame = 0;
+let noteTimer = 0;
+let wheelSum = 0;
+
+// 찾기(Ctrl+F). 표는 보이는 행만 그리므로 화면 글자가 아니라 표 값 전체에서 찾는다.
+/** 찾은 셀 번호(행 x FIND_KEY + 열)들. 읽는 순서(행, 열 순)다. */
+let found: number[] = [];
+let foundSet = new Set<number>();
+/** 지금 결과의 순번. 결과가 없으면 -1 */
+let foundIdx = -1;
+let findTimer = 0;
+
+const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+const cell = (r: number, c: number): string => rows[r]?.[c] ?? '';
+/** 가로 머리글이면 0번 행은 위에 고정되고 본문은 1번 행부터다. */
+const firstBody = (): number => (mode === 'row' && rows.length > 0 ? 1 : 0);
+/** 세로 머리글이면 0번 열이 행 번호 옆에 고정된다. 그 너비만큼 스크롤 영역이 좁아진다. */
+const stickyColW = (): number => (mode === 'column' ? widths[0] ?? 0 : 0);
+/** 행 r의 화면 높이 */
+const rowHeight = (r: number): number => Math.round((rowHt[r] ?? BASE_ROW_H) * zoom);
+/** 열 이름 행의 화면 높이 */
+const lettersH = (): number => Math.round(BASE_ROW_H * zoom);
+/** 위에 고정된 행(열 이름 행과 머리글 행)의 높이 */
+const headH = (): number => lettersH() + (firstBody() ? rowHeight(0) : 0);
+/** 한 줄 글자의 줄 높이. 행보다 크면 행이 늘어나 위치 계산이 어긋나므로 행 높이보다 작게 둔다. */
+const lineH = (h: number): number => Math.max(1, Math.min(h - 1, Math.round((BASE_ROW_H - 1) * zoom)));
+const trStyle = (h: number): string => `height:${h}px;line-height:${lineH(h)}px`;
+const rectOf = (a: Pos, b: Pos): Rect => [Math.min(a.row, b.row), Math.min(a.col, b.col), Math.max(a.row, b.row), Math.max(a.col, b.col)];
+/** 고른 범위 전부. 마지막이 지금 범위다. */
+const ranges = (): Rect[] => [...extra, rectOf(anchor, head)];
+const inRanges = (rs: Rect[], r: number, c: number): boolean => rs.some(([r1, c1, r2, c2]) => r >= r1 && r <= r2 && c >= c1 && c <= c2);
+const selectionKey = (): string => JSON.stringify([sel, anchor, head, extra]);
+
+function colLeft(c: number): number {
+    let x = 0;
+    for (let k = 0; k < c; k++) x += widths[k];
+    return x;
+}
+
+/** 0, 1, 2 ... 를 A, B, C ... AA 처럼 바꾼다. */
+function colName(c: number): string {
+    let s = '';
+    for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+    return s;
+}
+
+function esc(s: string): string {
+    return s.replace(/[&<>"]/g, (ch) => (ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;'));
+}
+
+/** 셀에 그릴 글자. 줄바꿈은 기호로 바꿔 행 높이가 늘지 않게 한다. */
+function shown(v: string): string {
+    return esc(v.length > SHOW_MAX ? v.slice(0, SHOW_MAX) : v).replace(/\r\n|\r|\n/g, '↵');
+}
+
+/** 열 c의 내용 폭(배율 100% 기준)을 앞쪽 sample행에서 잰다. */
+function contentWidth(c: number, sample: number): number {
+    ruler.font = `${baseFont}px ${fontFamily}`;
+    let w = ruler.measureText(colName(c)).width;
+    for (let r = 0; r < Math.min(rows.length, sample); r++) {
+        const v = rows[r][c];
+        if (v) w = Math.max(w, ruler.measureText(v.length > 60 ? v.slice(0, 60) : v).width);
+    }
+    return Math.ceil(w) + 16;
+}
+
+/** 앞쪽 1000행을 보고 열마다 자동 너비를 정한다. */
+function measure(): void {
+    autoW = [];
+    for (let c = 0; c < colCount; c++) autoW.push(clamp(contentWidth(c, 1000), 48, 320));
+    layoutDirty = true;
+}
+
+/** 배율과 사용자가 바꾼 크기로 화면 크기를 계산한다. 크기, 배율, 표, 머리글 방식이 바뀌면 다시 한다. */
+function layout(): void {
+    layoutDirty = false;
+    widths = autoW.map((w, c) => Math.round((colW[c] ?? w) * zoom));
+    numW = Math.round(numWBase * zoom);
+    const fb = firstBody();
+    const n = Math.max(rows.length - fb, 0);
+    tops = new Float64Array(n + 1);
+    for (let k = 0; k < n; k++) tops[k + 1] = tops[k] + rowHeight(k + fb);
+    const font = `${baseFont * zoom}px`;
+    table.style.fontSize = font;
+    editor.style.fontSize = font;
+    table.style.setProperty('--letters-h', `${lettersH()}px`);
+    // 세로 머리글 열은 행 번호 바로 옆에 고정한다(table.css의 .hc).
+    table.style.setProperty('--num-w', `${numW}px`);
+}
+
+/** 위치 y에 걸친 본문 행 번호(본문 안에서 몇 번째인지). 행 높이가 제각각이라 tops를 반씩 나눠 찾는다. */
+function findRow(y: number): number {
+    let lo = 0;
+    let hi = tops.length - 2;
+    if (hi < 0) return 0;
+    while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (tops[mid] <= y) lo = mid;
+        else hi = mid - 1;
+    }
+    return lo;
+}
+
+function render(): void {
+    frame = 0;
+    if (layoutDirty) layout();
+    emptyNote.hidden = rows.length > 0;
+    sizeText.textContent = text.size.replace('{rows}', rows.length.toLocaleString()).replace('{cols}', String(colCount));
+    if (!rows.length) {
+        table.innerHTML = '';
+        addrText.textContent = '';
+        selText.textContent = '';
+        return;
+    }
+    const fb = firstBody();
+    const n = rows.length - fb;
+    const viewH = grid.clientHeight - headH();
+    const start = clamp(findRow(grid.scrollTop) - OVERSCAN, 0, n);
+    const end = clamp(findRow(grid.scrollTop + viewH) + 1 + OVERSCAN, start, n);
+    const rs = ranges();
+    const count = rs.reduce((sum, [r1, c1, r2, c2]) => sum + (r2 - r1 + 1) * (c2 - c1 + 1), 0);
+
+    let html = `<colgroup><col style="width:${numW}px">`;
+    for (const w of widths) html += `<col style="width:${w}px">`;
+    // 왼쪽 위 네모를 누르면 전체 선택이다(구글 시트처럼).
+    html += `</colgroup><thead><tr class="letters" style="${trStyle(lettersH())}"><th class="corner" title="${esc(text.selectAll)}"></th>`;
+    for (let c = 0; c < colCount; c++) {
+        const cls = [rs.some(([, c1, , c2]) => c >= c1 && c <= c2) ? 'on' : '', mode === 'column' && c === 0 ? 'hc' : ''].join(' ').trim();
+        // 열 이름 오른쪽 경계를 끌면 너비가 바뀐다.
+        html += `<th data-c="${c}"${cls ? ` class="${cls}"` : ''}>${colName(c)}<span class="rs rs-c" data-rc="${c}"></span></th>`;
+    }
+    html += '</tr>';
+    if (fb) html += `<tr class="hdr" style="${trStyle(rowHeight(0))}">${rowHtml(0, rs, count > 1)}</tr>`;
+    html += '</thead><tbody>';
+    if (start > 0) html += pad(tops[start]);
+    for (let k = start; k < end; k++) html += `<tr style="${trStyle(rowHeight(k + fb))}">${rowHtml(k + fb, rs, count > 1)}</tr>`;
+    if (end < n) html += pad(tops[n] - tops[end]);
+    table.innerHTML = html + '</tbody>';
+    table.style.width = `${numW + colLeft(colCount)}px`;
+
+    addrText.textContent = `${colName(sel.col)}${sel.row + 1}`;
+    selText.textContent = count > 1 ? text.selected.replace('{n}', count.toLocaleString()) : '';
+    placeEditor();
+    vscodeApi.setState({ row: sel.row, col: sel.col, top: grid.scrollTop, left: grid.scrollLeft } satisfies ViewState);
+}
+
+/** 그리지 않은 행 자리를 채우는 빈 행 */
+function pad(height: number): string {
+    return `<tr><td class="pad" colspan="${colCount + 1}" style="height:${height}px"></td></tr>`;
+}
+
+function rowHtml(r: number, rs: Rect[], multi: boolean): string {
+    const vals = rows[r];
+    const on = rs.some(([r1, , r2]) => r >= r1 && r <= r2);
+    // 행 번호 아래쪽 경계를 끌면 높이가 바뀐다.
+    let h = `<th class="num${on ? ' on' : ''}" data-r="${r}">${r + 1}<span class="rs rs-r" data-rr="${r}"></span></th>`;
+    for (let c = 0; c < colCount; c++) {
+        const cls: string[] = [];
+        // 지금 셀은 진한 테두리만, 나머지 고른 셀은 파란 배경이다(구글 시트처럼 지금 셀은 배경을 칠하지 않는다).
+        if (r === sel.row && c === sel.col) cls.push('sel');
+        else if (multi && inRanges(rs, r, c)) cls.push('in');
+        if (mode === 'column' && c === 0) cls.push('hc');
+        // 줄무늬: 머리글이 놓인 방향을 따라 색이 1, 0, 1, 0으로 바뀐다. 가로 머리글이면 열을, 세로 머리글이면 행을 하나 건너 하나씩 칠한다.
+        // 머리글 셀은 칠하지 않는다. 파일 번호 기준이라 스크롤해도 무늬가 그대로다.
+        else if ((mode === 'row' && r > 0 && c % 2 === 0) || (mode === 'column' && r % 2 === 0)) cls.push('z');
+        // 찾은 셀은 노란 바탕, 지금 결과는 더 진한 바탕이다.
+        const key = r * FIND_KEY + c;
+        if (foundSet.has(key)) cls.push(key === found[foundIdx] ? 'found-cur' : 'found');
+        const edge = multi ? rangeEdges(rs, r, c) : '';
+        h += `<td data-r="${r}" data-c="${c}"${cls.length ? ` class="${cls.join(' ')}"` : ''}${edge}>${shown(vals[c] ?? '')}</td>`;
+    }
+    return h;
+}
+
+/** 고른 범위의 바깥 테두리. 범위 가장자리에 있는 셀에만 그 쪽 선을 긋는다. */
+function rangeEdges(rs: Rect[], r: number, c: number): string {
+    let top = false;
+    let bottom = false;
+    let left = false;
+    let right = false;
+    for (const [r1, c1, r2, c2] of rs) {
+        if (r < r1 || r > r2 || c < c1 || c > c2) continue;
+        top ||= r === r1;
+        bottom ||= r === r2;
+        left ||= c === c1;
+        right ||= c === c2;
+    }
+    const lines: string[] = [];
+    if (top) lines.push('inset 0 2px 0 var(--sel-line)');
+    if (bottom) lines.push('inset 0 -2px 0 var(--sel-line)');
+    if (left) lines.push('inset 2px 0 0 var(--sel-line)');
+    if (right) lines.push('inset -2px 0 0 var(--sel-line)');
+    return lines.length ? ` style="box-shadow:${lines.join(',')}"` : '';
+}
+
+/** 입력칸을 지금 셀 위에 둔다. 고치지 않을 때도 투명한 채로 포커스를 지켜 첫 글자를 받는다. */
+function placeEditor(): void {
+    const g = grid.getBoundingClientRect();
+    const inHead = mode === 'row' && sel.row === 0;
+    const inHeadCol = mode === 'column' && sel.col === 0;
+    const h = rowHeight(sel.row);
+    const top = inHead ? g.top + lettersH() : g.top + headH();
+    const left = g.left + numW + (inHeadCol ? 0 : stickyColW());
+    const x = inHeadCol ? left : g.left + numW + colLeft(sel.col) - grid.scrollLeft;
+    const y = inHead ? top : top + (tops[sel.row - firstBody()] ?? 0) - grid.scrollTop;
+    // 셀이 화면 밖이면 표 안쪽 가장자리에 붙인다. 한글 입력 창이 엉뚱한 곳에 뜨지 않게 하려고.
+    editor.style.left = `${clamp(x, left, Math.max(left, g.right - 60))}px`;
+    editor.style.top = `${clamp(y, top, Math.max(top, g.bottom - h))}px`;
+    editor.style.minWidth = `${widths[sel.col] ?? 48}px`;
+    editor.style.lineHeight = `${Math.round((BASE_ROW_H - 4) * zoom)}px`;
+    if (editing) fitEditor();
+    else editor.style.height = `${h}px`;
+}
+
+/** 고치는 동안 입력칸 크기를 글자에 맞춘다. */
+function fitEditor(): void {
+    const lines = editor.value.split('\n');
+    ruler.font = `${baseFont}px ${fontFamily}`;
+    let w = 0;
+    for (const line of lines.slice(0, 50)) w = Math.max(w, ruler.measureText(line).width);
+    editor.style.width = `${clamp(Math.ceil(w * zoom) + 24, widths[sel.col] ?? 48, 600 * zoom)}px`;
+    const textH = clamp(lines.length, 1, 10) * Math.round((BASE_ROW_H - 4) * zoom) + 4;
+    editor.style.height = `${Math.max(rowHeight(sel.row), textH)}px`;
+}
+
+/** 지정한 셀이 화면에 보이도록 스크롤한다. */
+function reveal(p: Pos): void {
+    if (layoutDirty) layout();
+    if (!(mode === 'row' && p.row === 0)) {
+        const y = tops[p.row - firstBody()] ?? 0;
+        const h = rowHeight(p.row);
+        const viewH = grid.clientHeight - headH();
+        if (y < grid.scrollTop) grid.scrollTop = y;
+        else if (y + h > grid.scrollTop + viewH) grid.scrollTop = y + h - viewH;
+    }
+    if (!(mode === 'column' && p.col === 0)) {
+        // 고정된 머리글 열 뒤에 가려지지 않게, 그 너비만큼 뺀 자리를 기준으로 본다.
+        const stick = stickyColW();
+        const x = colLeft(p.col) - stick;
+        const w = widths[p.col];
+        const viewW = grid.clientWidth - numW - stick;
+        if (x < grid.scrollLeft) grid.scrollLeft = x;
+        else if (x + w > grid.scrollLeft + viewW) grid.scrollLeft = x + w - viewW;
+    }
+}
+
+/** 지금 화면 왼쪽 위에 보이는 셀. 행이나 열 전체를 고를 때 화면이 튀지 않게 쓴다. */
+function topLeftVisible(): Pos {
+    let col = 0;
+    let x = 0;
+    while (col < colCount - 1 && x + widths[col] <= grid.scrollLeft) x += widths[col++];
+    return { row: firstBody() + findRow(grid.scrollTop), col };
+}
+
+/** 고르기 상태를 바꾸고, show 셀이 보이게 스크롤한 뒤 다시 그린다. */
+function setSelection(nextSel: Pos, nextAnchor: Pos, nextHead: Pos, nextExtra: Rect[], show: Pos): void {
+    if (!rows.length) return;
+    const fix = (p: Pos): Pos => ({ row: clamp(p.row, 0, rows.length - 1), col: clamp(p.col, 0, colCount - 1) });
+    const before = selectionKey();
+    sel = fix(nextSel);
+    anchor = fix(nextAnchor);
+    head = fix(nextHead);
+    extra = nextExtra;
+    reveal(fix(show));
+    // 같은 셀을 다시 누르면 다시 그리지 않는다. 두 번 누르기가 같은 셀 요소 위에서 일어나야 인식되기 때문이다.
+    if (selectionKey() !== before) render();
+}
+
+function selectCell(r: number, c: number): void {
+    const p = { row: r, col: c };
+    setSelection(p, p, p, [], p);
+}
+
+/** 지금 범위의 움직이는 끝만 옮긴다(Shift+방향키). 지금 셀과 시작 셀은 그대로다. */
+function extendTo(p: Pos): void {
+    setSelection(sel, anchor, p, extra, p);
+}
+
+function selectAll(): void {
+    setSelection(sel, { row: 0, col: 0 }, { row: rows.length - 1, col: colCount - 1 }, [], sel);
+}
+
+/** 표가 바뀐 뒤 고른 셀과 범위가 표 밖으로 나가지 않게 맞춘다. */
+function clampSelection(): void {
+    if (!rows.length) return;
+    const lastRow = rows.length - 1;
+    const lastCol = colCount - 1;
+    const fix = (p: Pos): Pos => ({ row: clamp(p.row, 0, lastRow), col: clamp(p.col, 0, lastCol) });
+    sel = fix(sel);
+    anchor = fix(anchor);
+    head = fix(head);
+    extra = extra.map(([r1, c1, r2, c2]): Rect => [clamp(r1, 0, lastRow), clamp(c1, 0, lastCol), clamp(r2, 0, lastRow), clamp(c2, 0, lastCol)]);
+}
+
+/** 셀 값들을 바꾼다. 확장이 파일을 고친 뒤 새 표를 다시 보내 주지만, 그 사이에도 바로 보이게 먼저 바꿔 둔다. */
+function setCells(cells: [number, number, string][]): void {
+    const changed = cells.filter(([r, c, v]) => cell(r, c) !== v);
+    if (!changed.length) return;
+    for (const [r, c, v] of changed) {
+        const row = rows[r];
+        while (row.length < c) row.push('');
+        row[c] = v;
+    }
+    vscodeApi.postMessage({ type: 'op', op: { kind: 'setCells', cells: changed } });
+    render();
+}
+
+/** 고른 셀을 모두 비운다. 되돌리기 한 번에 돌아온다. */
+function clearSelected(): void {
+    const cells: [number, number, string][] = [];
+    for (const [r1, c1, r2, c2] of ranges()) {
+        for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) if (cell(r, c) !== '') cells.push([r, c, '']);
+    }
+    setCells(cells);
+}
+
+/** 셀 고치기를 시작한다. initial이 null이면 입력칸에 이미 들어온 글자(첫 타자, 한글 조합)를 그대로 쓴다. */
+function startEditing(initial: string | null): void {
+    if (!rows.length) return;
+    editing = true;
+    if (initial !== null) {
+        editor.value = initial.replace(/\r\n?/g, '\n');
+        editor.setSelectionRange(editor.value.length, editor.value.length);
+    }
+    editor.classList.add('editing');
+    // 고치기를 시작하면 고른 범위는 지금 셀 하나로 줄인다.
+    anchor = { ...sel };
+    head = { ...sel };
+    extra = [];
+    reveal(sel);
+    render();
+}
+
+function stopEditing(): void {
+    editing = false;
+    editor.classList.remove('editing');
+    editor.value = '';
+    editor.style.width = '';
+}
+
+function commit(): void {
+    if (!editing) return;
+    const old = cell(sel.row, sel.col);
+    let v = editor.value;
+    stopEditing();
+    // 입력칸은 줄바꿈을 \n으로 바꾸므로, 고치지 않고 끝내면 파일도 그대로 둔다.
+    if (v === old.replace(/\r\n?/g, '\n')) return;
+    // 원래 셀이 \r\n 줄바꿈이었으면 그 모양을 따른다.
+    if (old.includes('\r\n')) v = v.replace(/\n/g, '\r\n');
+    setCells([[sel.row, sel.col, v]]);
+}
+
+/** 범위 하나를 값 표로 잘라 낸다. */
+function cut([r1, c1, r2, c2]: Rect): string[][] {
+    const out: string[][] = [];
+    for (let r = r1; r <= r2; r++) {
+        const line: string[] = [];
+        for (let c = c1; c <= c2; c++) line.push(cell(r, c));
+        out.push(line);
+    }
+    return out;
+}
+
+/**
+ * 복사할 값 표. 범위가 여러 개면 엑셀처럼, 모두 같은 열들에 걸쳐 있으면 위아래로,
+ * 모두 같은 행들에 걸쳐 있으면 좌우로 잇는다. 둘 다 아니면 null이다.
+ */
+function selectionBlock(): string[][] | null {
+    const rs = ranges();
+    if (rs.length === 1) return cut(rs[0]);
+    if (rs.every(([, c1, , c2]) => c1 === rs[0][1] && c2 === rs[0][3])) {
+        return [...rs].sort((a, b) => a[0] - b[0]).flatMap(cut);
+    }
+    if (rs.every(([r1, , r2]) => r1 === rs[0][0] && r2 === rs[0][2])) {
+        const parts = [...rs].sort((a, b) => a[1] - b[1]).map(cut);
+        return parts[0].map((_, i) => parts.flatMap((p) => p[i]));
+    }
+    return null;
+}
+
+/** 구글 시트가 읽는 탭 나눔 글자. 탭, 줄바꿈, 큰따옴표가 있는 셀은 큰따옴표로 감싼다. */
+function toTsv(block: string[][]): string {
+    const one = (v: string): string => (/[\t\r\n"]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    return block.map((line) => line.map(one).join('\t')).join('\r\n');
+}
+
+/** 구글 시트는 붙여 넣을 때 HTML 표가 있으면 먼저 써서 셀을 더 정확히 나눈다. */
+function toHtml(block: string[][]): string {
+    const one = (v: string): string => `<td>${esc(v).replace(/\r\n|\r|\n/g, '<br>')}</td>`;
+    return `<table>${block.map((line) => `<tr>${line.map(one).join('')}</tr>`).join('')}</table>`;
+}
+
+/** 고른 셀을 클립보드에 넣는다. 복사할 수 없는 고르기면 안내를 띄우고 false를 돌려준다. */
+function copySelection(e: ClipboardEvent): boolean {
+    const block = selectionBlock();
+    if (!block) {
+        notify(text.multiCopy);
+        return false;
+    }
+    e.clipboardData?.setData('text/plain', toTsv(block));
+    e.clipboardData?.setData('text/html', toHtml(block));
+    return true;
+}
+
+/** 위쪽 막대에 안내를 잠깐 띄운다. */
+function notify(message: string): void {
+    noteText.textContent = message;
+    clearTimeout(noteTimer);
+    noteTimer = window.setTimeout(() => (noteText.textContent = ''), 5000);
+}
+
+/** 배율, 사용자가 바꾼 열 너비와 행 높이를 확장에 보내 파일마다 기억하게 한다. */
+function saveView(): void {
+    vscodeApi.postMessage({ type: 'saveView', view: { zoom, colW, rowH: rowHt } });
+}
+
+/** 배율을 바꾼다. 모든 크기가 같은 비율로 바뀌므로 스크롤 자리도 같은 비율로 옮겨 보던 곳을 지킨다. */
+function setZoom(next: number): void {
+    zoomPct.textContent = `${Math.round(next * 100)}%`;
+    if (next === zoom) return;
+    const ratio = next / zoom;
+    const top = grid.scrollTop;
+    const left = grid.scrollLeft;
+    zoom = next;
+    layoutDirty = true;
+    if (!loaded) return;
+    render();
+    grid.scrollTop = top * ratio;
+    grid.scrollLeft = left * ratio;
+    render();
+    saveView();
+}
+
+/** 배율 단계를 하나 올리거나(1) 내린다(-1). */
+function zoomStep(dir: number): void {
+    let i = ZOOMS.indexOf(zoom);
+    if (i < 0) i = ZOOMS.indexOf(1);
+    setZoom(ZOOMS[clamp(i + dir, 0, ZOOMS.length - 1)]);
+}
+
+/**
+ * 크기를 바꿀 열이나 행들. 끄는 열(행)이 열(행) 통째로 고른 범위 안에 있으면 그 범위의 열(행) 모두이고,
+ * 아니면 그 열(행) 하나다(구글 시트 방식).
+ */
+function resizeTargets(kind: 'col' | 'row', index: number): number[] {
+    const out = new Set<number>();
+    for (const [r1, c1, r2, c2] of ranges()) {
+        if (kind === 'col' && r1 === 0 && r2 === rows.length - 1 && index >= c1 && index <= c2) {
+            for (let c = c1; c <= c2; c++) out.add(c);
+        }
+        if (kind === 'row' && c1 === 0 && c2 === colCount - 1 && index >= r1 && index <= r2) {
+            for (let r = r1; r <= r2; r++) out.add(r);
+        }
+    }
+    if (!out.size) out.add(index);
+    return [...out];
+}
+
+/**
+ * 찾을 글자로 표 전체를 다시 찾는다. 대소문자는 가리지 않고, 셀 값 안에 들어 있으면 찾은 것이다.
+ * move가 true면 지금 셀 다음(지금 셀 포함)의 첫 결과로 옮겨 가고, false면 고르기는 그대로 두고 결과만 새로 센다.
+ */
+function runFind(move: boolean): void {
+    clearTimeout(findTimer);
+    findTimer = 0;
+    const q = findInput.value.toLowerCase();
+    found = [];
+    if (q) {
+        outer: for (let r = 0; r < rows.length; r++) {
+            const vals = rows[r];
+            for (let c = 0; c < vals.length; c++) {
+                if (vals[c] && vals[c].toLowerCase().includes(q)) {
+                    found.push(r * FIND_KEY + c);
+                    if (found.length >= FIND_MAX) break outer;
+                }
+            }
+        }
+    }
+    foundSet = new Set(found);
+    const at = sel.row * FIND_KEY + sel.col;
+    foundIdx = found.findIndex((k) => k >= at);
+    if (foundIdx < 0 && found.length) foundIdx = 0;
+    if (move && foundIdx >= 0) goFound();
+    else showFound();
+}
+
+/** 지금 결과 셀을 골라 화면에 보이게 한다. */
+function goFound(): void {
+    const k = found[foundIdx];
+    selectCell(Math.floor(k / FIND_KEY), k % FIND_KEY);
+    showFound();
+}
+
+/** 결과 개수를 적고 강조를 다시 그린다. */
+function showFound(): void {
+    findCount.textContent = !findInput.value ? '' : found.length ? `${foundIdx + 1} / ${found.length.toLocaleString()}${found.length >= FIND_MAX ? '+' : ''}` : text.findNone;
+    findBox.classList.toggle('none', !!findInput.value && !found.length);
+    if (loaded) render();
+}
+
+/** 다음(1) 또는 이전(-1) 결과로 간다. 끝에서는 처음으로 돌아간다. */
+function findStep(dir: number): void {
+    if (findTimer) runFind(false);
+    if (!found.length) return;
+    foundIdx = (foundIdx + dir + found.length) % found.length;
+    goFound();
+}
+
+function openFind(): void {
+    // 표 오른쪽 위에 띄운다. 위쪽 막대 높이가 글꼴에 따라 달라서 열 때마다 자리를 잡는다.
+    findBox.style.top = `${grid.getBoundingClientRect().top + 6}px`;
+    findBox.hidden = false;
+    findInput.focus();
+    findInput.select();
+    if (findInput.value) runFind(false);
+}
+
+function closeFind(): void {
+    findBox.hidden = true;
+    clearTimeout(findTimer);
+    found = [];
+    foundSet = new Set();
+    foundIdx = -1;
+    if (loaded) render();
+    editor.focus({ preventScroll: true });
+}
+
+function onKey(e: KeyboardEvent): void {
+    // 한글, 번체 등을 조합하는 중에는 Enter 등을 입력기에 맡긴다.
+    if (e.isComposing || e.keyCode === 229) return;
+    // Ctrl+F: 찾기 상자를 연다. 고치는 중이면 먼저 확정한다. 한글 입력 상태에서도 되도록 글쇠 자리(code)로 본다.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyF') {
+        e.preventDefault();
+        commit();
+        openFind();
+        return;
+    }
+    // 찾기 상자가 열려 있으면 F3, Shift+F3으로 표에서도 결과를 넘긴다.
+    if (!findBox.hidden && e.key === 'F3') {
+        e.preventDefault();
+        commit();
+        findStep(e.shiftKey ? -1 : 1);
+        return;
+    }
+    if (editing) {
+        if (e.key === 'Enter' && e.altKey) {
+            e.preventDefault();
+            editor.setRangeText('\n', editor.selectionStart, editor.selectionEnd, 'end');
+            fitEditor();
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            commit();
+            const step = e.shiftKey ? -1 : 1;
+            if (e.key === 'Enter') selectCell(sel.row + step, sel.col);
+            else selectCell(sel.row, sel.col + step);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            stopEditing();
+        }
+        return;
+    }
+    const ctrl = e.ctrlKey || e.metaKey;
+    // Ctrl+Tab, Ctrl+PageUp 같은 탭 넘기기는 VS Code에 맡긴다.
+    if (ctrl && (e.key === 'Tab' || e.key === 'PageUp' || e.key === 'PageDown')) return;
+    if (!rows.length) return;
+    // 한글 입력 상태에서도 되도록 글쇠 자리(code)로 본다.
+    if (ctrl && !e.shiftKey && !e.altKey && e.code === 'KeyA') {
+        e.preventDefault();
+        selectAll();
+        return;
+    }
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        selectCell(sel.row, sel.col + (e.shiftKey ? -1 : 1));
+        return;
+    }
+    // Shift를 누르면 지금 셀 대신 범위의 움직이는 끝을 옮겨 범위를 늘린다.
+    const from = e.shiftKey ? head : sel;
+    const page = Math.max(1, Math.floor((grid.clientHeight - headH()) / (BASE_ROW_H * zoom)) - 1);
+    const last = rows.length - 1;
+    const lastCol = colCount - 1;
+    const moves: Record<string, Pos> = {
+        ArrowUp: { row: ctrl ? 0 : from.row - 1, col: from.col },
+        ArrowDown: { row: ctrl ? last : from.row + 1, col: from.col },
+        ArrowLeft: { row: from.row, col: ctrl ? 0 : from.col - 1 },
+        ArrowRight: { row: from.row, col: ctrl ? lastCol : from.col + 1 },
+        Home: { row: ctrl ? 0 : from.row, col: 0 },
+        End: { row: ctrl ? last : from.row, col: lastCol },
+        PageUp: { row: from.row - page, col: from.col },
+        PageDown: { row: from.row + page, col: from.col },
+    };
+    const to = moves[e.key];
+    if (to) {
+        e.preventDefault();
+        if (e.shiftKey) extendTo(to);
+        else selectCell(to.row, to.col);
+        return;
+    }
+    // Ctrl+S, Ctrl+Z 같은 단축키는 VS Code가 처리한다.
+    if (ctrl || e.altKey) return;
+    if (e.key === 'Enter' || e.key === 'F2') {
+        e.preventDefault();
+        startEditing(cell(sel.row, sel.col));
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        clearSelected();
+    } else if (e.key === 'Escape') {
+        selectCell(sel.row, sel.col);
+    }
+}
+
+editor.addEventListener('keydown', onKey);
+editor.addEventListener('input', () => (editing ? fitEditor() : startEditing(null)));
+editor.addEventListener('compositionstart', () => {
+    if (!editing) startEditing(null);
+});
+editor.addEventListener('blur', commit);
+
+// 고치는 중이 아닐 때 복사, 잘라내기, 붙여 넣기는 고른 셀에 대해 한다. 고치는 중에는 보통 글자 복사, 붙여 넣기다.
+editor.addEventListener('copy', (e) => {
+    if (editing || !rows.length) return;
+    e.preventDefault();
+    copySelection(e);
+});
+editor.addEventListener('cut', (e) => {
+    if (editing || !rows.length) return;
+    e.preventDefault();
+    if (copySelection(e)) clearSelected();
+});
+editor.addEventListener('paste', (e) => {
+    if (editing) return;
+    e.preventDefault();
+    const data = e.clipboardData?.getData('text/plain') ?? '';
+    if (!data) return;
+    // 지금 범위의 왼쪽 위 셀부터 채운다. 글자를 셀로 나누는 일은 확장이 한다(csv.ts의 pasteCells).
+    const [r1, c1] = rows.length ? rectOf(anchor, head) : [0, 0];
+    vscodeApi.postMessage({ type: 'op', op: { kind: 'paste', row: r1, col: c1, text: data, fill: rows.length ? ranges() : [] } });
+});
+
+grid.addEventListener('mousedown', (e) => {
+    const target = e.target as HTMLElement;
+    if (!rows.length) return;
+    // 열 이름, 행 번호 경계: 끌어서 크기를 바꾼다. 고르기는 하지 않는다.
+    const handle = target.closest<HTMLElement>('.rs');
+    if (handle && e.button === 0) {
+        e.preventDefault();
+        commit();
+        const kind = handle.dataset.rc !== undefined ? 'col' : 'row';
+        const index = Number(kind === 'col' ? handle.dataset.rc : handle.dataset.rr);
+        const base = kind === 'col' ? colW[index] ?? autoW[index] : rowHt[index] ?? BASE_ROW_H;
+        resizing = { kind, targets: resizeTargets(kind, index), start: kind === 'col' ? e.clientX : e.clientY, base };
+        document.body.classList.add(kind === 'col' ? 'col-resizing' : 'row-resizing');
+        return;
+    }
+    // 왼쪽 위 네모: 전체 선택
+    if (target.closest('th.corner')) {
+        e.preventDefault();
+        commit();
+        selectAll();
+        editor.focus({ preventScroll: true });
+        return;
+    }
+    const t = target.closest<HTMLElement>('[data-r], [data-c]');
+    if (!t) return;
+    // 입력칸 포커스를 지키려고 기본 동작을 막는다.
+    e.preventDefault();
+    commit();
+    const r = t.dataset.r === undefined ? -1 : Number(t.dataset.r);
+    const c = t.dataset.c === undefined ? -1 : Number(t.dataset.c);
+    // 열 이름을 누르면 그 열 전체, 행 번호를 누르면 그 행 전체다.
+    const unit: DragMode = r < 0 ? 'col' : c < 0 ? 'row' : 'cell';
+    const view = topLeftVisible();
+    const a: Pos = unit === 'col' ? { row: 0, col: c } : unit === 'row' ? { row: r, col: 0 } : { row: r, col: c };
+    const h: Pos = unit === 'col' ? { row: rows.length - 1, col: c } : unit === 'row' ? { row: r, col: colCount - 1 } : a;
+    // 행이나 열 전체를 고를 때는 화면이 맨 위나 맨 왼쪽으로 튀지 않게 한다.
+    const show: Pos = unit === 'col' ? { row: view.row, col: c } : unit === 'row' ? { row: r, col: view.col } : h;
+    if (e.button === 2) {
+        // 오른쪽 버튼: 고른 범위 안이면 범위는 두고 지금 셀만 옮긴다. 메뉴 작업이 이 셀 기준이다.
+        if (unit === 'cell' && inRanges(ranges(), r, c)) setSelection(a, anchor, head, extra, a);
+        else setSelection(a, a, h, [], show);
+    } else if (e.shiftKey) {
+        // Shift+클릭: 시작 셀은 두고 범위를 누른 곳까지 늘린다. 행 번호, 열 이름이면 행, 열 단위로 늘린다.
+        const from: Pos = unit === 'col' ? { row: 0, col: anchor.col } : unit === 'row' ? { row: anchor.row, col: 0 } : anchor;
+        setSelection(sel, from, h, extra, show);
+        drag = unit;
+    } else if (e.ctrlKey || e.metaKey) {
+        // Ctrl+클릭: 지금 범위를 남겨 두고 새 범위를 시작한다.
+        setSelection(a, a, h, [...extra, rectOf(anchor, head)], show);
+        drag = unit;
+    } else {
+        setSelection(a, a, h, [], show);
+        drag = unit;
+    }
+    editor.focus({ preventScroll: true });
+});
+// 누른 채 끌면 지금 범위의 움직이는 끝을 따라 옮긴다.
+grid.addEventListener('mousemove', (e) => {
+    if (!drag || resizing) return;
+    if (!(e.buttons & 1)) {
+        drag = null;
+        return;
+    }
+    const t = (e.target as HTMLElement).closest<HTMLElement>('[data-r], [data-c]');
+    if (!t) return;
+    const r = t.dataset.r === undefined ? head.row : Number(t.dataset.r);
+    const c = t.dataset.c === undefined ? head.col : Number(t.dataset.c);
+    const h: Pos = drag === 'col' ? { row: rows.length - 1, col: c } : drag === 'row' ? { row: r, col: colCount - 1 } : { row: r, col: c };
+    if (h.row !== head.row || h.col !== head.col) {
+        head = h;
+        render();
+    }
+});
+// 크기 조절은 표 밖으로 나가도 이어지게 창 전체에서 받는다.
+window.addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    const moved = ((resizing.kind === 'col' ? e.clientX : e.clientY) - resizing.start) / zoom;
+    const v = Math.round(resizing.kind === 'col' ? clamp(resizing.base + moved, COL_W_MIN, COL_W_MAX) : clamp(resizing.base + moved, ROW_H_MIN, ROW_H_MAX));
+    const sizes = resizing.kind === 'col' ? colW : rowHt;
+    for (const i of resizing.targets) sizes[i] = v;
+    layoutDirty = true;
+    if (!frame) frame = requestAnimationFrame(render);
+});
+window.addEventListener('mouseup', () => {
+    drag = null;
+    if (!resizing) return;
+    resizing = null;
+    document.body.classList.remove('col-resizing', 'row-resizing');
+    saveView();
+});
+grid.addEventListener('mouseup', () => {
+    if (!editing) editor.focus({ preventScroll: true });
+});
+grid.addEventListener('dblclick', (e) => {
+    const target = e.target as HTMLElement;
+    // 경계를 두 번 누르면 열은 내용에 맞추고, 행은 기본 높이로 되돌린다.
+    const handle = target.closest<HTMLElement>('.rs');
+    if (handle) {
+        const kind = handle.dataset.rc !== undefined ? 'col' : 'row';
+        const index = Number(kind === 'col' ? handle.dataset.rc : handle.dataset.rr);
+        for (const i of resizeTargets(kind, index)) {
+            if (kind === 'col') colW[i] = clamp(contentWidth(i, 5000), COL_W_MIN, FIT_MAX);
+            else delete rowHt[i];
+        }
+        layoutDirty = true;
+        render();
+        saveView();
+        return;
+    }
+    if (target.closest('td[data-c]')) startEditing(cell(sel.row, sel.col));
+});
+// 오른쪽 버튼 메뉴 명령이 어느 셀 기준인지 확장에 알린다.
+grid.addEventListener('contextmenu', () => vscodeApi.postMessage({ type: 'menu', row: rows.length ? sel.row : -1, col: sel.col }));
+grid.addEventListener('scroll', () => {
+    if (!frame) frame = requestAnimationFrame(render);
+});
+// Ctrl+휠: 확대와 축소. 터치패드는 조금씩 여러 번 오므로 모아서 한 단계씩 바꾼다.
+document.addEventListener(
+    'wheel',
+    (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        wheelSum += e.deltaY;
+        if (Math.abs(wheelSum) < 40) return;
+        zoomStep(wheelSum < 0 ? 1 : -1);
+        wheelSum = 0;
+    },
+    { passive: false },
+);
+window.addEventListener('resize', () => {
+    if (!frame) frame = requestAnimationFrame(render);
+});
+window.addEventListener('focus', () => editor.focus({ preventScroll: true }));
+
+/** 머리글 고정 방식을 바꾸고 토글 버튼 모양을 맞춘다. */
+function setMode(next: HeaderMode): void {
+    mode = next;
+    layoutDirty = true;
+    for (const b of modeButtons) {
+        const on = b.dataset.mode === mode;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+    }
+    // 표를 받기 전에 그리면 "빈 파일" 안내가 잠깐 비친다.
+    if (!loaded) return;
+    if (rows.length) reveal(sel);
+    render();
+}
+
+for (const b of modeButtons) {
+    // 입력칸 포커스를 지키려고 누를 때의 기본 동작을 막는다. 누름(click)은 그대로 온다.
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => {
+        const next = b.dataset.mode;
+        if (!isHeaderMode(next) || next === mode) return;
+        commit();
+        setMode(next);
+        // 확장이 사용자 설정에 저장하고, 열려 있는 다른 표에도 알린다.
+        vscodeApi.postMessage({ type: 'headerMode', mode: next });
+    });
+}
+setMode(mode);
+
+// 찾기 상자: 글자를 칠 때마다(잠깐 쉬었다가) 다시 찾는다. 큰 표에서 한 글자마다 전부 찾으면 느려서다.
+findInput.addEventListener('input', () => {
+    clearTimeout(findTimer);
+    findTimer = window.setTimeout(() => {
+        findTimer = 0;
+        runFind(true);
+    }, 150);
+});
+findInput.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' || e.key === 'F3') {
+        e.preventDefault();
+        findStep(e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeFind();
+    } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyF') {
+        e.preventDefault();
+        findInput.select();
+    }
+});
+for (const b of findButtons) {
+    // 찾기 칸 포커스를 지키려고 누를 때의 기본 동작을 막는다.
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => {
+        if (b.dataset.find === 'prev') findStep(-1);
+        else if (b.dataset.find === 'next') findStep(1);
+        else closeFind();
+    });
+}
+
+for (const b of zoomButtons) {
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => {
+        if (b.dataset.zoom === 'in') zoomStep(1);
+        else if (b.dataset.zoom === 'out') zoomStep(-1);
+        else setZoom(1);
+    });
+}
+
+window.addEventListener('message', (e: MessageEvent) => {
+    const m = e.data as { type?: string; rows?: string[][]; text?: Record<string, string>; mode?: unknown; view?: unknown };
+    if (m.type === 'text' && m.text) {
+        text = m.text;
+        modeLabel.textContent = text.headerLabel;
+        for (const b of modeButtons) {
+            const key = b.dataset.mode === 'row' ? 'Row' : b.dataset.mode === 'column' ? 'Column' : 'None';
+            b.textContent = text[`mode${key}`];
+            b.title = text[`mode${key}Tip`];
+        }
+        for (const b of zoomButtons) {
+            b.title = b.dataset.zoom === 'in' ? text.zoomIn : b.dataset.zoom === 'out' ? text.zoomOut : text.zoomReset;
+        }
+        findInput.placeholder = text.findPlaceholder;
+        for (const b of findButtons) b.title = b.dataset.find === 'prev' ? text.findPrev : b.dataset.find === 'next' ? text.findNext : text.findClose;
+        emptyNote.textContent = text.emptyFile;
+        if (loaded) render();
+        return;
+    }
+    if (m.type === 'mode') {
+        if (isHeaderMode(m.mode) && m.mode !== mode) setMode(m.mode);
+        return;
+    }
+    if (m.type === 'view') {
+        // 확장이 이 파일에 기억해 둔 배율과 크기(view.ts가 검사한 값). 없으면 기본값이다.
+        const v = (m.view ?? {}) as { zoom?: number; colW?: Record<number, number>; rowH?: Record<number, number> };
+        colW = { ...(v.colW ?? {}) };
+        rowHt = { ...(v.rowH ?? {}) };
+        zoom = ZOOMS.includes(v.zoom ?? 1) ? v.zoom ?? 1 : 1;
+        zoomPct.textContent = `${Math.round(zoom * 100)}%`;
+        layoutDirty = true;
+        if (loaded) render();
+        return;
+    }
+    if (m.type !== 'data' || !Array.isArray(m.rows)) return;
+    rows = m.rows;
+    const cols = rows.reduce((n, r) => Math.max(n, r.length), 0);
+    if (!loaded || cols !== colCount) {
+        colCount = cols;
+        measure();
+    }
+    ruler.font = `${baseFont}px ${fontFamily}`;
+    numWBase = Math.max(40, Math.ceil(ruler.measureText(String(rows.length)).width) + 16);
+    layoutDirty = true;
+    clampSelection();
+    // 찾기 상자가 열려 있으면 바뀐 표에서 결과를 다시 센다(고르기는 그대로).
+    if (!findBox.hidden && findInput.value) runFind(false);
+    render();
+    if (!loaded) {
+        // 처음 열 때는 지난번 스크롤 자리로 돌아간다(탭을 옮겼다 오면 웹뷰가 새로 그려지기 때문).
+        loaded = true;
+        grid.scrollTop = saved.top ?? 0;
+        grid.scrollLeft = saved.left ?? 0;
+        render();
+    }
+});
+
+vscodeApi.postMessage({ type: 'ready' });
+editor.focus({ preventScroll: true });

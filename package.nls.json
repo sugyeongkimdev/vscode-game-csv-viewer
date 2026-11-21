@@ -1,0 +1,20 @@
+{
+  "description": "Edit CSV/TSV files as a table. Only the cells you change are rewritten.",
+  "customEditor.displayName": "Game CSV Viewer Table",
+  "command.openTable": "Open as Table",
+  "command.openText": "Open as Text",
+  "command.insertRowAbove": "Insert Row Above",
+  "command.insertRowBelow": "Insert Row Below",
+  "command.deleteRow": "Delete Row",
+  "command.insertColLeft": "Insert Column Left",
+  "command.insertColRight": "Insert Column Right",
+  "command.deleteCol": "Delete Column",
+  "config.language.description": "Language of the table view. Auto follows the VS Code display language: Korean if it is Korean, otherwise English. Command and menu names always follow the VS Code display language.",
+  "config.language.auto": "Follow the VS Code display language (English if it is not Korean)",
+  "config.language.en": "English",
+  "config.language.ko": "Korean (한국어)",
+  "config.headerMode.description": "Which header the table view fixes in place. The table view toggle changes this setting, so every CSV file uses the same choice.",
+  "config.headerMode.row": "First row is the header (fixed at the top)",
+  "config.headerMode.column": "First column is the header (fixed at the left)",
+  "config.headerMode.none": "No header"
+}

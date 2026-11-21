@@ -1,0 +1,2 @@
+# cmd 파일은 LF 줄끝이면 goto, call 라벨을 못 찾는 경우가 있어 CRLF로 고정한다.
+*.cmd text eol=crlf

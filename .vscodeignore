@@ -1,0 +1,16 @@
+.git/**
+.vscode/**
+.claude/**
+node_modules/**
+src/**
+tests/**
+build/**
+out/**/*.map
+*.ts
+tsconfig.json
+package-lock.json
+build.cmd
+.gitignore
+.gitattributes
+*.vsix
+docs/**

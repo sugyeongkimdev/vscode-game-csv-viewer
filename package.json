@@ -1,0 +1,219 @@
+{
+  "name": "vscode-game-csv-viewer",
+  "displayName": "Game CSV Viewer",
+  "description": "%description%",
+  "version": "0.1.7",
+  "publisher": "sugyeongkimdev",
+  "icon": "media/icon.png",
+  "preview": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sugyeongkimdev/vscode-game-csv-viewer.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Data Science",
+    "Other"
+  ],
+  "keywords": [
+    "csv",
+    "tsv",
+    "table",
+    "spreadsheet",
+    "editor"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "gameCsvViewer.table",
+        "displayName": "%customEditor.displayName%",
+        "selector": [
+          {
+            "filenamePattern": "*.csv"
+          },
+          {
+            "filenamePattern": "*.tsv"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "gameCsvViewer.openTable",
+        "title": "%command.openTable%",
+        "category": "Game CSV Viewer",
+        "icon": "$(table)"
+      },
+      {
+        "command": "gameCsvViewer.openText",
+        "title": "%command.openText%",
+        "category": "Game CSV Viewer",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "gameCsvViewer.insertRowAbove",
+        "title": "%command.insertRowAbove%",
+        "category": "Game CSV Viewer"
+      },
+      {
+        "command": "gameCsvViewer.insertRowBelow",
+        "title": "%command.insertRowBelow%",
+        "category": "Game CSV Viewer"
+      },
+      {
+        "command": "gameCsvViewer.deleteRow",
+        "title": "%command.deleteRow%",
+        "category": "Game CSV Viewer"
+      },
+      {
+        "command": "gameCsvViewer.insertColLeft",
+        "title": "%command.insertColLeft%",
+        "category": "Game CSV Viewer"
+      },
+      {
+        "command": "gameCsvViewer.insertColRight",
+        "title": "%command.insertColRight%",
+        "category": "Game CSV Viewer"
+      },
+      {
+        "command": "gameCsvViewer.deleteCol",
+        "title": "%command.deleteCol%",
+        "category": "Game CSV Viewer"
+      }
+    ],
+    "configuration": {
+      "title": "Game CSV Viewer",
+      "properties": {
+        "gameCsvViewer.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "en",
+            "ko"
+          ],
+          "enumDescriptions": [
+            "%config.language.auto%",
+            "%config.language.en%",
+            "%config.language.ko%"
+          ],
+          "default": "auto",
+          "description": "%config.language.description%"
+        },
+        "gameCsvViewer.headerMode": {
+          "type": "string",
+          "enum": [
+            "row",
+            "column",
+            "none"
+          ],
+          "enumDescriptions": [
+            "%config.headerMode.row%",
+            "%config.headerMode.column%",
+            "%config.headerMode.none%"
+          ],
+          "default": "row",
+          "description": "%config.headerMode.description%"
+        }
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "gameCsvViewer.openTable",
+          "when": "resourceExtname =~ /^\\.(csv|tsv)$/i && activeCustomEditorId != 'gameCsvViewer.table'",
+          "group": "navigation"
+        },
+        {
+          "command": "gameCsvViewer.openText",
+          "when": "activeCustomEditorId == 'gameCsvViewer.table'",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "gameCsvViewer.openTable",
+          "when": "resourceExtname =~ /^\\.(csv|tsv)$/i",
+          "group": "navigation"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "gameCsvViewer.insertRowAbove",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection == 'cell'",
+          "group": "1_row@1"
+        },
+        {
+          "command": "gameCsvViewer.insertRowBelow",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection =~ /^(cell|empty)$/",
+          "group": "1_row@2"
+        },
+        {
+          "command": "gameCsvViewer.deleteRow",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection == 'cell'",
+          "group": "1_row@3"
+        },
+        {
+          "command": "gameCsvViewer.insertColLeft",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection == 'cell'",
+          "group": "2_col@1"
+        },
+        {
+          "command": "gameCsvViewer.insertColRight",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection == 'cell'",
+          "group": "2_col@2"
+        },
+        {
+          "command": "gameCsvViewer.deleteCol",
+          "when": "webviewId == 'gameCsvViewer.table' && webviewSection == 'cell'",
+          "group": "2_col@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gameCsvViewer.openText",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.insertRowAbove",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.insertRowBelow",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.deleteRow",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.insertColLeft",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.insertColRight",
+          "when": "false"
+        },
+        {
+          "command": "gameCsvViewer.deleteCol",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test tests/*.test.js",
+    "package": "npx @vscode/vsce package --no-rewrite-relative-links"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.0.0"
+  }
+}

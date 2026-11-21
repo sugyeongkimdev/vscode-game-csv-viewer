@@ -1,0 +1,20 @@
+{
+  "description": "CSV, TSV 파일을 표로 열어 고칩니다. 고친 셀의 글자만 바꿉니다.",
+  "customEditor.displayName": "Game CSV Viewer 표",
+  "command.openTable": "표로 열기",
+  "command.openText": "텍스트 편집기로 열기",
+  "command.insertRowAbove": "위에 행 삽입",
+  "command.insertRowBelow": "아래에 행 삽입",
+  "command.deleteRow": "행 삭제",
+  "command.insertColLeft": "왼쪽에 열 삽입",
+  "command.insertColRight": "오른쪽에 열 삽입",
+  "command.deleteCol": "열 삭제",
+  "config.language.description": "표 화면의 언어입니다. 자동은 VS Code 표시 언어가 한국어면 한국어, 그 밖에는 영어입니다. 명령과 메뉴 이름은 언제나 VS Code 표시 언어를 따릅니다.",
+  "config.language.auto": "VS Code 표시 언어 따르기(한국어가 아니면 영어)",
+  "config.language.en": "영어(English)",
+  "config.language.ko": "한국어",
+  "config.headerMode.description": "표 화면에서 고정할 머리글입니다. 표 화면의 토글 버튼이 이 설정을 바꾸므로, 모든 CSV 파일에 같은 값이 쓰입니다.",
+  "config.headerMode.row": "첫 행을 머리글로 위에 고정",
+  "config.headerMode.column": "첫 열을 머리글로 왼쪽에 고정",
+  "config.headerMode.none": "머리글 없음"
+}

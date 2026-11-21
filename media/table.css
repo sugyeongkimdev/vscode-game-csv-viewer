@@ -1,0 +1,371 @@
+/* 고르기 색은 테마 색 대신 정한 파란색을 쓴다(2026-11-20 사용자 요청, 참고 그림과 같은 모양). 밝은 테마, 어두운 테마 모두에서 보이는 값이다. */
+:root {
+    /* 격자선: 테마의 경계선 색은 어두운 테마에서 거의 안 보여서 반투명 회색을 쓴다. */
+    --grid-line: rgba(128, 128, 128, 0.45);
+    --head-bg: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    /* 고른 범위의 행 번호, 열 이름 바탕과 글자 */
+    --sel-head-bg: #0e5bc9;
+    --sel-head-fg: #ffffff;
+    /* 고른 셀 바탕, 고른 범위 테두리와 지금 셀 테두리 */
+    --sel-bg: rgba(40, 120, 255, 0.24);
+    --sel-line: #3d8bfd;
+    /* 줄무늬 */
+    --stripe: rgba(128, 128, 128, 0.1);
+    /* 찾은 셀과 지금 결과 */
+    --find-bg: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+    --find-cur-bg: var(--vscode-editor-findMatchBackground, rgba(255, 150, 50, 0.6));
+    /* 머리글 행, 머리글 열의 옅은 연파란색. 고른 범위의 진한 파란색과 헷갈리지 않게 옅게 둔다. */
+    --head-tint: rgba(80, 150, 255, 0.16);
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    background: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--vscode-editor-font-size, 13px);
+}
+
+#bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--grid-line);
+    font-family: var(--vscode-font-family, sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+}
+
+/* 머리글 토글 묶음: 버튼 세 개를 붙여 하나처럼 보이게 하고, 고른 버튼은 고르기 색으로 채운다. */
+.seg {
+    display: inline-flex;
+    align-items: center;
+}
+
+#modeLabel {
+    margin-right: 6px;
+    opacity: 0.8;
+}
+
+.seg button {
+    margin: 0 0 0 -1px;
+    padding: 1px 12px;
+    font: inherit;
+    color: var(--vscode-foreground, inherit);
+    background: transparent;
+    border: 1px solid var(--grid-line);
+    cursor: pointer;
+}
+
+.seg button:first-of-type {
+    margin-left: 0;
+    border-radius: 3px 0 0 3px;
+}
+
+.seg button:last-of-type {
+    border-radius: 0 3px 3px 0;
+}
+
+.seg button:hover:not(.on) {
+    background: rgba(128, 128, 128, 0.18);
+}
+
+.seg button.on {
+    position: relative;
+    color: var(--sel-head-fg);
+    background: var(--sel-head-bg);
+    border-color: var(--sel-head-bg);
+}
+
+#addr {
+    min-width: 64px;
+    font-weight: 600;
+}
+
+#selinfo {
+    opacity: 0.8;
+}
+
+#note {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+#size {
+    margin-left: auto;
+    opacity: 0.7;
+}
+
+#grid {
+    flex: 1;
+    overflow: auto;
+}
+
+#empty {
+    padding: 16px;
+    opacity: 0.7;
+}
+
+table {
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
+}
+
+/* 행 높이와 줄 높이는 table.ts가 행(tr)마다 style로 넣는다. 행마다 높이가 다를 수 있고, 배율에 따라 바뀌기 때문이다. */
+th,
+td {
+    box-sizing: border-box;
+    padding: 0 6px;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-right: 1px solid var(--grid-line);
+    border-bottom: 1px solid var(--grid-line);
+}
+
+th {
+    background: var(--head-bg);
+    color: var(--vscode-descriptionForeground, inherit);
+    font-weight: normal;
+    text-align: center;
+    user-select: none;
+}
+
+thead th,
+thead td {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+tr.hdr > * {
+    top: var(--letters-h, 22px);
+    background: var(--head-bg);
+    font-weight: 600;
+}
+
+th.num,
+th.corner {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    text-align: right;
+}
+
+thead th.num,
+thead th.corner {
+    z-index: 3;
+}
+
+/* 세로 머리글: 첫 열을 행 번호 바로 옆에 고정한다. --num-w는 table.ts가 행 번호 너비로 넣는다. */
+th.hc,
+td.hc {
+    position: sticky;
+    left: var(--num-w, 40px);
+    z-index: 1;
+    background: var(--head-bg);
+    font-weight: 600;
+}
+
+thead th.hc {
+    z-index: 3;
+}
+
+/* 머리글 행(가로)과 머리글 열(세로)의 셀은 옅은 연파란색으로 칠해 본문과 구별한다. 고정된 셀이라 불투명한 바탕 위에 겹쳐 칠한다. */
+tr.hdr > td,
+td.hc {
+    background: linear-gradient(var(--head-tint), var(--head-tint)), var(--head-bg);
+}
+
+td.z {
+    background: var(--stripe);
+}
+
+/* 아래 고르기 규칙은 위의 머리글, 줄무늬 규칙보다 뒤에 둬야 이긴다. */
+th.on {
+    background: var(--sel-head-bg);
+    color: var(--sel-head-fg);
+}
+
+td.in {
+    background: var(--sel-bg);
+}
+
+/* 고정된 셀은 뒤가 비치지 않게, 반투명한 고르기 색을 불투명한 바탕 위에 겹쳐 칠한다. */
+thead td.in,
+td.hc.in {
+    background: linear-gradient(var(--sel-bg), var(--sel-bg)), var(--head-bg);
+}
+
+/* 찾은 셀: VS Code 찾기와 같은 테마 색. 고른 셀 색보다 뒤에 둬서 이긴다. 고정된 셀은 불투명한 바탕 위에 겹친다. */
+td.found {
+    background: var(--find-bg);
+}
+
+td.found-cur {
+    background: var(--find-cur-bg);
+}
+
+thead td.found,
+td.hc.found {
+    background: linear-gradient(var(--find-bg), var(--find-bg)), var(--head-bg);
+}
+
+thead td.found-cur,
+td.hc.found-cur {
+    background: linear-gradient(var(--find-cur-bg), var(--find-cur-bg)), var(--head-bg);
+}
+
+td.sel {
+    outline: 2px solid var(--sel-line);
+    outline-offset: -2px;
+}
+
+/* 찾기 상자: 표 오른쪽 위에 뜬다(top은 table.ts가 연 때 정한다). */
+#find {
+    position: fixed;
+    right: 20px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--vscode-editorWidget-background, var(--head-bg));
+    border: 1px solid var(--vscode-editorWidget-border, var(--grid-line));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+    font-family: var(--vscode-font-family, sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+}
+
+#find[hidden] {
+    display: none;
+}
+
+#findInput {
+    width: 200px;
+    padding: 2px 6px;
+    font: inherit;
+    color: var(--vscode-input-foreground, inherit);
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-input-border, var(--grid-line));
+    outline: none;
+}
+
+#findInput:focus {
+    border-color: var(--sel-line);
+}
+
+#find.none #findInput {
+    border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+#findCount {
+    min-width: 72px;
+    text-align: center;
+    opacity: 0.85;
+}
+
+#find button {
+    min-width: 24px;
+    padding: 1px 4px;
+    font: inherit;
+    color: var(--vscode-foreground, inherit);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+#find button:hover {
+    background: rgba(128, 128, 128, 0.2);
+}
+
+td.pad {
+    padding: 0;
+    border: 0;
+    line-height: 0;
+}
+
+/* 왼쪽 위 네모: 누르면 전체 선택 */
+th.corner {
+    cursor: pointer;
+}
+
+th.corner:hover {
+    background: linear-gradient(rgba(128, 128, 128, 0.25), rgba(128, 128, 128, 0.25)), var(--head-bg);
+}
+
+/* 크기 조절 손잡이: 열 이름의 오른쪽 경계, 행 번호의 아래쪽 경계. 머리 셀은 sticky라 그 안에 붙는다. */
+.rs {
+    position: absolute;
+    z-index: 4;
+}
+
+.rs-c {
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+}
+
+.rs-r {
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 5px;
+    cursor: row-resize;
+}
+
+.rs:hover {
+    background: var(--sel-line);
+}
+
+/* 끄는 동안에는 손잡이 밖으로 나가도 커서 모양을 유지한다. */
+body.col-resizing,
+body.col-resizing * {
+    cursor: col-resize !important;
+}
+
+body.row-resizing,
+body.row-resizing * {
+    cursor: row-resize !important;
+}
+
+#zoomPct {
+    min-width: 56px;
+}
+
+/* 고치지 않을 때도 투명한 채로 포커스를 지켜, 첫 글자와 한글 조합을 놓치지 않는다. */
+#editor {
+    position: fixed;
+    z-index: 10;
+    margin: 0;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border: 2px solid var(--sel-line);
+    outline: none;
+    resize: none;
+    overflow: hidden;
+    white-space: pre;
+    font-family: inherit;
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    color: var(--vscode-input-foreground, inherit);
+    opacity: 0;
+    pointer-events: none;
+}
+
+#editor.editing {
+    opacity: 1;
+    pointer-events: auto;
+    overflow: auto;
+}
