@@ -16,5 +16,8 @@
   "config.headerMode.description": "표 화면에서 고정할 머리글입니다. 표 화면의 토글 버튼이 이 설정을 바꾸므로, 모든 CSV 파일에 같은 값이 쓰입니다.",
   "config.headerMode.row": "첫 행을 머리글로 위에 고정",
   "config.headerMode.column": "첫 열을 머리글로 왼쪽에 고정",
-  "config.headerMode.none": "머리글 없음"
+  "config.headerMode.none": "머리글 없음",
+  "config.defaultEditor.description": "CSV, TSV 파일을 열 때 쓸 편집기입니다. text는 보통 글자 편집기, table은 표 화면으로 엽니다. 어느 쪽이든 표 화면을 보고 있을 때 연 다른 CSV 파일도 표로 열리고, 오른쪽 위 버튼으로 둘을 오갈 수 있습니다.",
+  "config.defaultEditor.text": "글자 편집기",
+  "config.defaultEditor.table": "표 화면"
 }

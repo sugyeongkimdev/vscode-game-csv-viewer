@@ -35,11 +35,11 @@ rem 올린 버전까지 들어간 상태를 남겨야 다음 실행에서 변경
 call :tree || goto :fail
 >"%STAMP%" echo %TREE%
 
-rem PATH의 code 명령은 Cursor가 먼저 잡히므로, 편집기마다 전체 경로로 불러 설치한다.
+rem VS Code에만 설치한다(Cursor에는 설치하지 않는다, 2026-11-21 사용자 지시). PATH의 code 명령은 Cursor가 먼저 잡히므로 VS Code 전체 경로로 부른다.
 for /f %%v in ('node -p "require('./package.json').version"') do set "VER=%%v"
 set "VSIX=build\vscode-game-csv-viewer-%VER%.vsix"
 set "INSTALLED="
-for %%c in ("%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd" "%LOCALAPPDATA%\Programs\cursor\resources\app\bin\cursor.cmd") do (
+for %%c in ("%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd") do (
     if exist %%c (
         call %%c --install-extension "%VSIX%" --force || goto :installfail
         set "INSTALLED=1"
@@ -48,7 +48,7 @@ for %%c in ("%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd" "%LOCALAPPD
 if defined INSTALLED (
     echo [build] 설치 완료. 열려 있는 창에서 "Developer: Reload Window"를 실행하세요.
 ) else (
-    echo [build] VS Code, Cursor를 찾지 못해 설치를 건너뜁니다. %VSIX% 파일을 직접 설치하세요.
+    echo [build] VS Code를 찾지 못해 설치를 건너뜁니다. %VSIX% 파일을 직접 설치하세요.
 )
 echo [build] 완료
 pause

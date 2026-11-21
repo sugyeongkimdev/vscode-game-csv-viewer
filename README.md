@@ -49,6 +49,7 @@ Edit CSV and TSV files in VS Code as a spreadsheet-like table. Only the cells yo
 |---|---|---|
 | `gameCsvViewer.language` | `auto` | Table view language. `auto` follows the VS Code display language (Korean if it is Korean, otherwise English). Also `en`, `ko`. |
 | `gameCsvViewer.headerMode` | `row` | Fixed header: `row` (first row), `column` (first column) or `none`. The toggle in the table view changes this setting. |
+| `gameCsvViewer.defaultEditor` | `text` | How CSV and TSV files open: `text` (text editor) or `table` (table view). Either way, a CSV you open while a table view is in front also opens as a table. |
 
 Command and menu names always follow the VS Code display language.
 
@@ -95,6 +96,7 @@ VS Code에서 CSV, TSV 파일을 스프레드시트 같은 표로 열어 고치�
 
 - `gameCsvViewer.language`: 표 화면 언어입니다. 자동(기본)은 VS Code 표시 언어가 한국어면 한국어, 그 밖에는 영어입니다.
 - `gameCsvViewer.headerMode`: 고정할 머리글입니다. 표 화면의 토글 버튼이 이 설정을 바꿉니다.
+- `gameCsvViewer.defaultEditor`: CSV, TSV 파일을 열 때 쓸 편집기입니다. `text`(기본)는 글자 편집기, `table`은 표 화면입니다. 어느 쪽이든 표 화면을 보고 있을 때 연 CSV는 표로 열립니다.
 
 ### 알아 둘 점
 
@@ -106,6 +108,6 @@ VS Code에서 CSV, TSV 파일을 스프레드시트 같은 표로 열어 고치�
 
 ## Development
 
-- `build.cmd` compiles, bumps the patch version, packages a VSIX into `build/` and installs it into VS Code and Cursor (Windows). Run `Developer: Reload Window` afterwards.
+- `build.cmd` compiles, bumps the patch version, packages a VSIX into `build/` and installs it into VS Code (Windows). Run `Developer: Reload Window` afterwards.
 - `npm test` runs the unit tests.
 - `node tests/check-real-files.js <folder>` reads every CSV and TSV under a folder and checks that cell positions match the original text and that editing a cell changes nothing else.

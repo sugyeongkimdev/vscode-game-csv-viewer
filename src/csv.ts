@@ -15,6 +15,8 @@ export interface CsvRow {
 export interface CsvDoc {
     rows: CsvRow[];
     values: string[][];
+    /** 읽은 원래 글자. 행, 열을 옮길 때 셀 글자를 따옴표 모양 그대로 옮기려고 둔다 */
+    text: string;
 }
 
 export interface TextEdit {
@@ -31,7 +33,12 @@ export type Rect = [r1: number, c1: number, r2: number, c2: number];
 export type CsvOp =
     | { kind: 'setCells'; cells: Cell[] }
     | { kind: 'paste'; row: number; col: number; text: string; fill?: Rect[] }
-    | { kind: 'insertRow' | 'deleteRow' | 'insertCol' | 'deleteCol'; at: number };
+    /** at 앞에 빈 행(열)을 count개(없으면 1개) 넣는다. */
+    | { kind: 'insertRow' | 'insertCol'; at: number; count?: number }
+    /** at의 행(열)을 지운다. 여러 개면 이어지지 않아도 된다. */
+    | { kind: 'deleteRow' | 'deleteCol'; at: number | number[] }
+    /** from부터 count개 행(열)을 to 앞으로 옮긴다. to는 옮기기 전 번호다. 묶음 안이나 바로 뒤면 그대로다. */
+    | { kind: 'moveRows' | 'moveCols'; from: number; count: number; to: number };
 
 const QUOTE = 34;
 const LF = 10;
@@ -101,7 +108,7 @@ export function parseCsv(text: string, delimiter: string): CsvDoc {
         rows.push({ start, end, next: i, cells });
         values.push(vals);
     }
-    return { rows, values };
+    return { rows, values, text };
 }
 
 /** 셀 값을 파일 글자로 바꾼다. 따옴표는 꼭 필요할 때만 붙인다(MSW는 쓸데없는 따옴표를 화면에 그대로 보여 준다). */
@@ -125,47 +132,111 @@ export function editsFor(doc: CsvDoc, op: CsvOp, delimiter: string, eol: string)
             return setCellsEdits(doc, pasteCells(op.text, op.row, op.col, op.fill), delimiter, eol);
         case 'insertRow': {
             const at = Math.min(Math.max(op.at, 0), rows.length);
-            const line = delimiter.repeat(Math.max(columnCount(doc) - 1, 0));
-            if (at < rows.length) return [{ start: rows[at].start, end: rows[at].start, text: line + eol }];
-            return [appendLines(doc, [line], eol)];
+            const lines = Array<string>(Math.max(op.count ?? 1, 1)).fill(delimiter.repeat(Math.max(columnCount(doc) - 1, 0)));
+            if (at < rows.length) return [{ start: rows[at].start, end: rows[at].start, text: lines.join(eol) + eol }];
+            return [appendLines(doc, lines, eol)];
         }
         case 'deleteRow': {
-            const row = rows[op.at];
-            if (!row) return [];
-            if (row.next > row.end || op.at === 0) return [{ start: row.start, end: row.next, text: '' }];
-            // 줄바꿈 없는 마지막 행은 앞 행의 줄바꿈까지 지워서 빈 행이 남지 않게 한다.
-            return [{ start: rows[op.at - 1].end, end: row.end, text: '' }];
+            // 이어진 행 묶음마다 한 번에 지운다. 따로 지우면 마지막 행 처리에서 지울 자리가 겹친다.
+            const edits: TextEdit[] = [];
+            for (const [a, b] of runs(op.at, rows.length)) {
+                if (rows[b].next > rows[b].end || a === 0) edits.push({ start: rows[a].start, end: rows[b].next, text: '' });
+                // 줄바꿈 없는 마지막 행까지 지우면 앞 행의 줄바꿈부터 지워서 빈 행이 남지 않게 한다.
+                else edits.push({ start: rows[a - 1].end, end: rows[b].end, text: '' });
+            }
+            return edits;
         }
         case 'insertCol': {
             const edits: TextEdit[] = [];
             const at = Math.max(op.at, 0);
+            const text = delimiter.repeat(Math.max(op.count ?? 1, 1));
             for (const row of rows) {
                 const count = row.cells.length / 2;
-                if (at < count) edits.push({ start: row.cells[at * 2], end: row.cells[at * 2], text: delimiter });
-                else if (at === count) edits.push({ start: row.end, end: row.end, text: delimiter });
+                if (at < count) edits.push({ start: row.cells[at * 2], end: row.cells[at * 2], text });
+                else if (at === count) edits.push({ start: row.end, end: row.end, text });
             }
             return edits;
         }
         case 'deleteCol': {
             const edits: TextEdit[] = [];
-            const at = op.at;
             for (const row of rows) {
                 const c = row.cells;
                 const count = c.length / 2;
-                if (at < 0 || at >= count) continue;
-                if (count === 1) {
-                    if (c[1] > c[0]) edits.push({ start: c[0], end: c[1], text: '' });
-                } else if (at < count - 1) {
-                    // 셀과 뒤따르는 나눔 글자를 함께 지운다.
-                    edits.push({ start: c[at * 2], end: c[at * 2 + 2], text: '' });
-                } else {
-                    // 마지막 셀은 앞의 나눔 글자와 함께 지운다.
-                    edits.push({ start: c[at * 2 - 1], end: c[at * 2 + 1], text: '' });
+                // 이어진 열 묶음마다 한 번에 지운다(행마다 셀 수가 달라서 행마다 묶는다).
+                for (const [a, b] of runs(op.at, count)) {
+                    if (b < count - 1) {
+                        // 셀들과 뒤따르는 나눔 글자를 함께 지운다.
+                        edits.push({ start: c[a * 2], end: c[b * 2 + 2], text: '' });
+                    } else if (a === 0) {
+                        // 행의 셀을 모두 지우면 빈 행이 남는다.
+                        if (c[b * 2 + 1] > c[0]) edits.push({ start: c[0], end: c[b * 2 + 1], text: '' });
+                    } else {
+                        // 마지막 셀까지 지우면 앞의 나눔 글자부터 지운다.
+                        edits.push({ start: c[a * 2 - 1], end: c[b * 2 + 1], text: '' });
+                    }
                 }
             }
             return edits;
         }
+        case 'moveRows': {
+            const mv = moveOrder(op, rows.length);
+            if (!mv) return [];
+            const { lo, order } = mv;
+            const last = rows[lo + order.length - 1];
+            // 행 글자는 원래대로 옮기고, 행 사이 줄바꿈은 자리에 그대로 둔다(줄바꿈 없는 마지막 행도 그대로다).
+            let text = '';
+            order.forEach((i, j) => {
+                text += doc.text.slice(rows[i].start, rows[i].end);
+                if (j < order.length - 1) text += doc.text.slice(rows[lo + j].end, rows[lo + j].next);
+            });
+            return [{ start: rows[lo].start, end: last.end, text }];
+        }
+        case 'moveCols': {
+            const mv = moveOrder(op, columnCount(doc));
+            if (!mv) return [];
+            const { lo, order } = mv;
+            const edits: TextEdit[] = [];
+            for (const row of rows) {
+                const c = row.cells;
+                const count = c.length / 2;
+                if (lo >= count) continue;
+                // 셀 수가 모자란 행은 없는 칸을 빈 값으로 본다. 원래 없던 칸 자리에 빈 값만 오면 칸을 늘리지 않는다.
+                const parts = order.map((i) => (i < count ? doc.text.slice(c[i * 2], c[i * 2 + 1]) : ''));
+                let keep = parts.length;
+                while (keep > count - lo && parts[keep - 1] === '') keep--;
+                const start = c[lo * 2];
+                const end = c[(Math.min(lo + order.length, count) - 1) * 2 + 1];
+                const text = parts.slice(0, keep).join(delimiter);
+                if (text !== doc.text.slice(start, end)) edits.push({ start, end, text });
+            }
+            return edits;
+        }
     }
+}
+
+/**
+ * 옮기기 작업에서 바뀌는 구간의 첫 번호(lo)와, 그 구간 자리마다 올 원래 번호들(order)을 구한다.
+ * 번호가 0~n 밖이거나 옮겨도 그대로면 undefined다.
+ */
+function moveOrder(op: { from: number; count: number; to: number }, n: number): { lo: number; order: number[] } | undefined {
+    const { from, count, to } = op;
+    const end = from + count;
+    if (![from, count, to].every(Number.isInteger) || from < 0 || count < 1 || end > n || to < 0 || to > n) return undefined;
+    if (to >= from && to <= end) return undefined;
+    const seq = (a: number, b: number): number[] => Array.from({ length: b - a }, (_, i) => a + i);
+    return to < from ? { lo: to, order: [...seq(from, end), ...seq(to, from)] } : { lo: from, order: [...seq(end, to), ...seq(from, end)] };
+}
+
+/** 번호들(하나나 여러 개) 가운데 0 이상 n 미만인 것을 이어진 묶음 [처음, 끝]들로 나눈다. 작은 것부터. */
+function runs(at: number | number[], n: number): [number, number][] {
+    const list = [...new Set(Array.isArray(at) ? at : [at])].filter((i) => Number.isInteger(i) && i >= 0 && i < n).sort((x, y) => x - y);
+    const out: [number, number][] = [];
+    for (const i of list) {
+        const last = out[out.length - 1];
+        if (last && last[1] === i - 1) last[1] = i;
+        else out.push([i, i]);
+    }
+    return out;
 }
 
 /** 여러 셀을 한 번에 바꾼다. 행이 모자라면 파일 끝에 행을 늘리고, 열이 모자란 행은 나눔 글자를 채운다. */

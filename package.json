@@ -2,7 +2,7 @@
   "name": "vscode-game-csv-viewer",
   "displayName": "Game CSV Viewer",
   "description": "%description%",
-  "version": "0.1.7",
+  "version": "0.1.24",
   "publisher": "sugyeongkimdev",
   "icon": "media/icon.png",
   "preview": true,
@@ -26,6 +26,9 @@
     "editor"
   ],
   "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "customEditors": [
       {
@@ -47,13 +50,19 @@
         "command": "gameCsvViewer.openTable",
         "title": "%command.openTable%",
         "category": "Game CSV Viewer",
-        "icon": "$(table)"
+        "icon": {
+          "light": "media/icons/open-table-light.svg",
+          "dark": "media/icons/open-table-dark.svg"
+        }
       },
       {
         "command": "gameCsvViewer.openText",
         "title": "%command.openText%",
         "category": "Game CSV Viewer",
-        "icon": "$(go-to-file)"
+        "icon": {
+          "light": "media/icons/open-text-light.svg",
+          "dark": "media/icons/open-text-dark.svg"
+        }
       },
       {
         "command": "gameCsvViewer.insertRowAbove",
@@ -118,6 +127,19 @@
           ],
           "default": "row",
           "description": "%config.headerMode.description%"
+        },
+        "gameCsvViewer.defaultEditor": {
+          "type": "string",
+          "enum": [
+            "text",
+            "table"
+          ],
+          "enumDescriptions": [
+            "%config.defaultEditor.text%",
+            "%config.defaultEditor.table%"
+          ],
+          "default": "text",
+          "description": "%config.defaultEditor.description%"
         }
       }
     },

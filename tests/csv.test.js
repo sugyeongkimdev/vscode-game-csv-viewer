@@ -122,6 +122,56 @@ test('열 삽입과 삭제', () => {
     assert.equal(run('"x,y",b\n', { kind: 'deleteCol', at: 0 }), 'b\n');
 });
 
+test('여러 행 넣기와 지우기(고른 행이 여러 개일 때)', () => {
+    assert.equal(run('a\nb\n', { kind: 'insertRow', at: 1, count: 3 }), 'a\n\n\n\nb\n');
+    assert.equal(run('a,b\r\nc,d', { kind: 'insertRow', at: 2, count: 2 }, ',', '\r\n'), 'a,b\r\nc,d\r\n,\r\n,');
+    // 이어진 행, 이어지지 않은 행, 범위 밖 번호, 같은 번호 두 번
+    assert.equal(run('a\nb\nc\nd\ne\n', { kind: 'deleteRow', at: [1, 2] }), 'a\nd\ne\n');
+    assert.equal(run('a\nb\nc\nd\ne\n', { kind: 'deleteRow', at: [4, 0, 2, 2, 9] }), 'b\nd\n');
+    // 줄바꿈 없는 마지막 행까지 묶어 지우면 앞 행의 줄바꿈부터 지운다.
+    assert.equal(run('a\nb\nc', { kind: 'deleteRow', at: [1, 2] }), 'a');
+    assert.equal(run('a\nb\nc', { kind: 'deleteRow', at: [0, 2] }), 'b');
+    assert.equal(run('a\nb\nc', { kind: 'deleteRow', at: [0, 1, 2] }), '');
+});
+
+test('여러 열 넣기와 지우기(행마다 셀 수가 달라도)', () => {
+    const text = 'a,b,c,d\n1,2\n';
+    assert.equal(run(text, { kind: 'insertCol', at: 1, count: 2 }), 'a,,,b,c,d\n1,,,2\n');
+    assert.equal(run(text, { kind: 'deleteCol', at: [1, 2] }), 'a,d\n1\n');
+    assert.equal(run(text, { kind: 'deleteCol', at: [0, 2] }), 'b,d\n2\n');
+    // 마지막 열까지 묶어 지우면 앞의 나눔 글자부터 지운다.
+    assert.equal(run(text, { kind: 'deleteCol', at: [2, 3] }), 'a,b\n1,2\n');
+    assert.equal(run(text, { kind: 'deleteCol', at: [1, 3] }), 'a,c\n1\n');
+    // 셀을 모두 지우면 빈 행이 남는다.
+    assert.equal(run(text, { kind: 'deleteCol', at: [0, 1, 2, 3] }), '\n\n');
+    assert.equal(run('"x,y",b,c\n', { kind: 'deleteCol', at: [0, 1] }), 'c\n');
+});
+
+test('행 옮기기는 행 글자를 그대로 옮기고 줄바꿈 자리는 둔다', () => {
+    const text = 'h\na\nb\nc\nd\n';
+    assert.equal(run(text, { kind: 'moveRows', from: 3, count: 2, to: 1 }), 'h\nc\nd\na\nb\n');
+    assert.equal(run(text, { kind: 'moveRows', from: 1, count: 1, to: 5 }), 'h\nb\nc\nd\na\n');
+    assert.equal(run(text, { kind: 'moveRows', from: 1, count: 2, to: 4 }), 'h\nc\na\nb\nd\n');
+    // 묶음 안이나 바로 뒤, 범위 밖은 그대로
+    assert.equal(run(text, { kind: 'moveRows', from: 1, count: 2, to: 3 }), text);
+    assert.equal(run(text, { kind: 'moveRows', from: 1, count: 2, to: 2 }), text);
+    assert.equal(run(text, { kind: 'moveRows', from: 4, count: 2, to: 0 }), text);
+    // 줄바꿈 없는 마지막 행, CRLF, 셀 안 줄바꿈과 따옴표는 원래 글자 그대로
+    assert.equal(run('a\r\nb\r\nc', { kind: 'moveRows', from: 2, count: 1, to: 0 }), 'c\r\na\r\nb');
+    assert.equal(run('a\r\nb\r\nc', { kind: 'moveRows', from: 0, count: 1, to: 3 }), 'b\r\nc\r\na');
+    assert.equal(run('x,"p\nq"\n"y",z\n', { kind: 'moveRows', from: 1, count: 1, to: 0 }), '"y",z\nx,"p\nq"\n');
+});
+
+test('열 옮기기는 행마다 셀 글자를 그대로 옮긴다(셀 수가 달라도)', () => {
+    assert.equal(run('a,b,c,d\n1,2,3,4\n', { kind: 'moveCols', from: 2, count: 2, to: 0 }), 'c,d,a,b\n3,4,1,2\n');
+    assert.equal(run('a,"b,x",c\n', { kind: 'moveCols', from: 0, count: 1, to: 3 }), '"b,x",c,a\n');
+    // 셀이 모자란 행: 없는 칸은 빈 값이다. 빈 값만 밀려나면 칸을 늘리지 않고, 값이 없던 칸으로 가면 칸을 늘린다.
+    assert.equal(run('a,b,c,d\n1,2\n', { kind: 'moveCols', from: 3, count: 1, to: 0 }), 'd,a,b,c\n,1,2\n');
+    assert.equal(run('a,b,c,d\n1,2\n', { kind: 'moveCols', from: 0, count: 1, to: 4 }), 'b,c,d,a\n2,,,1\n');
+    assert.equal(run('a,b,c,d\n1\n', { kind: 'moveCols', from: 2, count: 1, to: 1 }), 'a,c,b,d\n1\n');
+    assert.equal(run('a,b\n', { kind: 'moveCols', from: 0, count: 1, to: 1 }), 'a,b\n');
+});
+
 test('TSV는 탭으로 나눈다', () => {
     assert.deepEqual(values('a\tb,c\n', '\t'), [['a', 'b,c']]);
     assert.equal(run('a\tb\n', set(0, 1, 'x\ty'), '\t'), 'a\t"x\ty"\n');

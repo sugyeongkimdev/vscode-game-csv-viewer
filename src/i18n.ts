@@ -12,6 +12,7 @@ const EN_TEXT = {
     modeRowTip: 'First row is the header (fixed at the top)',
     modeColumnTip: 'First column is the header (fixed at the left)',
     modeNoneTip: 'No header',
+    zoomLabel: 'Zoom',
     zoomOut: 'Zoom out (Ctrl+wheel down)',
     zoomIn: 'Zoom in (Ctrl+wheel up)',
     zoomReset: 'Reset zoom to 100%',
@@ -24,6 +25,8 @@ const EN_TEXT = {
     emptyFile: 'This file is empty. Right-click here to insert a row.',
     size: '{rows} rows, {cols} columns',
     selected: '{n} cells selected',
+    moveRows: 'Move rows ({n})',
+    moveCols: 'Move columns ({n})',
     multiCopy: 'Multiple ranges can be copied only when they cover the same rows or the same columns.',
     error: 'Game CSV Viewer: {message}',
 };
@@ -38,6 +41,7 @@ const KO_TEXT: UiText = {
     modeRowTip: '첫 행을 머리글로 위에 고정',
     modeColumnTip: '첫 열을 머리글로 왼쪽에 고정',
     modeNoneTip: '머리글 없음',
+    zoomLabel: '배율',
     zoomOut: '축소(Ctrl+휠 아래로)',
     zoomIn: '확대(Ctrl+휠 위로)',
     zoomReset: '100%로 되돌리기',
@@ -50,6 +54,8 @@ const KO_TEXT: UiText = {
     emptyFile: '빈 파일입니다. 여기를 오른쪽 버튼으로 눌러 행을 삽입하세요.',
     size: '{rows}행, {cols}열',
     selected: '셀 {n}개 선택',
+    moveRows: '행 {n}개 옮기기',
+    moveCols: '열 {n}개 옮기기',
     multiCopy: '여러 범위는 같은 행들이나 같은 열들에 걸쳐 있을 때만 복사할 수 있습니다.',
     error: 'Game CSV Viewer: {message}',
 };
