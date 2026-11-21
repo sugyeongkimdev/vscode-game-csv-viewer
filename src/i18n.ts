@@ -27,6 +27,9 @@ const EN_TEXT = {
     selected: '{n} cells selected',
     moveRows: 'Move rows ({n})',
     moveCols: 'Move columns ({n})',
+    editCanceled: 'The cell you were editing changed or was removed outside the table, so the edit was canceled.',
+    staleEdit: 'Game CSV Viewer: The file changed outside the table after you saw it, so this edit was not applied. Check the table and try again.',
+    openQuote: 'Game CSV Viewer: This file has a quote that is never closed. Rows or columns added at the end will go inside that cell. Fix the quote in the text editor first.',
     multiCopy: 'Multiple ranges can be copied only when they cover the same rows or the same columns.',
     error: 'Game CSV Viewer: {message}',
 };
@@ -56,6 +59,9 @@ const KO_TEXT: UiText = {
     selected: '셀 {n}개 선택',
     moveRows: '행 {n}개 옮기기',
     moveCols: '열 {n}개 옮기기',
+    editCanceled: '고치던 셀이 표 밖에서 바뀌거나 없어져서 고치기를 취소했습니다.',
+    staleEdit: 'Game CSV Viewer: 표를 본 뒤 파일이 표 밖에서 바뀌어 이 고침은 넣지 않았습니다. 표를 확인하고 다시 해 주세요.',
+    openQuote: 'Game CSV Viewer: 이 파일에는 닫히지 않은 따옴표가 있습니다. 끝에 행이나 열을 붙이면 그 셀 안으로 들어가니, 글자 편집기에서 따옴표를 먼저 고쳐 주세요.',
     multiCopy: '여러 범위는 같은 행들이나 같은 열들에 걸쳐 있을 때만 복사할 수 있습니다.',
     error: 'Game CSV Viewer: {message}',
 };

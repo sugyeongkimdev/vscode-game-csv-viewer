@@ -70,15 +70,27 @@ export interface SizeStep {
 export interface SizeHistory {
     undo: SizeStep[];
     redo: SizeStep[];
+    /** VS Code 다시 하기로 되살릴 수 있는 글자 고침 수(csvEditor.ts의 noteTextChange가 센다) */
+    textRedos?: number;
 }
 
 /** 표 화면이 보기 설정을 보낼 때 부른다. 열 너비나 행 높이가 바뀌었으면 기록에 넣는다. 배율만 바뀐 것은 넣지 않는다. */
 export function recordSizes(h: SizeHistory, before: ViewSettings | undefined, after: ViewSettings | undefined, text: number, textBefore = text): void {
-    const b = { colW: before?.colW ?? {}, rowH: before?.rowH ?? {} };
-    const a = { colW: after?.colW ?? {}, rowH: after?.rowH ?? {} };
-    if (JSON.stringify(b) === JSON.stringify(a)) return;
-    h.undo.push({ before: b, after: a, text, textBefore });
+    if (sameSizes(before, after)) return;
+    h.undo.push({ before: sizesOf(before), after: sizesOf(after), text, textBefore });
+    // 기록이 끝없이 쌓이지 않게 오래된 것부터 버린다.
+    if (h.undo.length > MAX_SIZE_STEPS) h.undo.splice(0, h.undo.length - MAX_SIZE_STEPS);
     h.redo.length = 0;
+}
+
+/** 파일 하나가 기억하는 크기 되돌리기 기록 수 상한 */
+const MAX_SIZE_STEPS = 500;
+
+const sizesOf = (v: ViewSettings | undefined): Sizes => ({ colW: v?.colW ?? {}, rowH: v?.rowH ?? {} });
+
+/** 두 보기 설정의 열 너비, 행 높이가 같은지(배율은 보지 않는다) */
+export function sameSizes(a: ViewSettings | undefined, b: ViewSettings | undefined): boolean {
+    return JSON.stringify(sizesOf(a)) === JSON.stringify(sizesOf(b));
 }
 
 /**
@@ -125,14 +137,20 @@ export function insertSizes(m: Record<string, number>, at: number, count: number
 
 /** 번호들을 지우면 그 크기는 빠지고, 뒤 번호의 크기는 앞에서 지운 개수만큼 당겨진다. */
 export function deleteSizes(m: Record<string, number>, gone: number[]): Record<string, number> {
-    const set = new Set(gone);
+    // 지운 번호를 정렬해 두고, 번호마다 그보다 작은 지운 번호 수를 반씩 나눠 찾는다(크기 수 x 지운 수만큼 돌지 않게).
+    const sorted = [...new Set(gone)].sort((x, y) => x - y);
     const out: Record<string, number> = {};
     for (const [k, v] of Object.entries(m)) {
         const i = Number(k);
-        if (set.has(i)) continue;
-        let before = 0;
-        for (const g of set) if (g < i) before++;
-        out[i - before] = v;
+        let lo = 0;
+        let hi = sorted.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (sorted[mid] < i) lo = mid + 1;
+            else hi = mid;
+        }
+        if (sorted[lo] === i) continue;
+        out[i - lo] = v;
     }
     return out;
 }

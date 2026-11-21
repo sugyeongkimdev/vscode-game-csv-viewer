@@ -113,3 +113,36 @@ test('글자 지문은 글자가 다르면 대개 다르다', () => {
     assert.notEqual(textPrint('a,b'), textPrint('a,c'));
     assert.notEqual(textPrint(''), textPrint('\n'));
 });
+
+test('지우기 번호 매기기는 단순한 방식과 결과가 같다', () => {
+    const { deleteSizes } = require('../out/view');
+    const naive = (m, gone) => {
+        const set = new Set(gone);
+        const out = {};
+        for (const [k, v] of Object.entries(m)) {
+            const i = Number(k);
+            if (set.has(i)) continue;
+            out[i - [...set].filter((g) => g < i).length] = v;
+        }
+        return out;
+    };
+    let seed = 3;
+    const rnd = (n) => Math.floor(((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * n);
+    for (let k = 0; k < 500; k++) {
+        const m = {};
+        for (let i = 0; i < rnd(12); i++) m[rnd(30)] = 20 + rnd(100);
+        const gone = Array.from({ length: rnd(10) }, () => rnd(30));
+        assert.deepEqual(deleteSizes(m, gone), naive(m, gone));
+    }
+});
+
+test('크기 기록은 오래된 것부터 버려 상한을 넘지 않는다', () => {
+    const { sameSizes } = require('../out/view');
+    const h = { undo: [], redo: [] };
+    for (let i = 0; i < 600; i++) recordSizes(h, { zoom: 1, colW: { 0: 50 + i }, rowH: {} }, { zoom: 1, colW: { 0: 51 + i }, rowH: {} }, 1);
+    assert.equal(h.undo.length, 500);
+    assert.deepEqual(h.undo[0].after.colW, { 0: 151 });
+    assert.equal(sameSizes({ zoom: 2, colW: { 1: 9 }, rowH: {} }, { zoom: 1, colW: { 1: 9 }, rowH: {} }), true);
+    assert.equal(sameSizes(undefined, { zoom: 1, colW: {}, rowH: {} }), true);
+    assert.equal(sameSizes(undefined, { zoom: 1, colW: { 0: 30 }, rowH: {} }), false);
+});

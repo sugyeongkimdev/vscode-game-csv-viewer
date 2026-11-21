@@ -2,7 +2,7 @@
   "name": "vscode-game-csv-viewer",
   "displayName": "Game CSV Viewer",
   "description": "%description%",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "publisher": "sugyeongkimdev",
   "icon": "media/icon.png",
   "preview": true,
@@ -159,7 +159,7 @@
       "explorer/context": [
         {
           "command": "gameCsvViewer.openTable",
-          "when": "resourceExtname =~ /^\\.(csv|tsv)$/i",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(csv|tsv)$/i",
           "group": "navigation"
         }
       ],
@@ -196,6 +196,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "gameCsvViewer.openTable",
+          "when": "resourceExtname =~ /^\\.(csv|tsv)$/i && activeCustomEditorId != 'gameCsvViewer.table'"
+        },
         {
           "command": "gameCsvViewer.openText",
           "when": "false"

@@ -308,6 +308,12 @@ td.pad {
     line-height: 0;
 }
 
+/* 그리지 않은 열들 자리를 채우는 빈자리(table.ts의 render). 화면 밖에 있어서 보이지 않는다. */
+.gap {
+    padding: 0;
+    border: 0;
+}
+
 /* 왼쪽 위 네모: 누르면 전체 선택 */
 th.corner {
     cursor: pointer;

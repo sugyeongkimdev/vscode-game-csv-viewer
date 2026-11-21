@@ -172,6 +172,100 @@ test('열 옮기기는 행마다 셀 글자를 그대로 옮긴다(셀 수가 �
     assert.equal(run('a,b\n', { kind: 'moveCols', from: 0, count: 1, to: 1 }), 'a,b\n');
 });
 
+test('줄바꿈 없는 마지막 행이 빈 행이 되어도 사라지지 않는다', () => {
+    const rowsOf = (text) => values(text).length;
+    // 셀 하나짜리 마지막 행 비우기(Delete, 빈 값 붙여 넣기)
+    assert.equal(run('name\nAAA\nBBB', set(2, 0, '')), 'name\nAAA\n\n');
+    assert.equal(rowsOf(run('name\nAAA\nBBB', set(2, 0, ''))), 3);
+    assert.equal(run('a', set(0, 0, '')), '\n');
+    // 비우면서 뒤에 행을 더 붙이면 줄바꿈은 한 번만
+    assert.deepEqual(values(run('a\nb', { kind: 'setCells', cells: [[1, 0, ''], [2, 0, 'c']] })), [['a'], [''], ['c']]);
+    // 빈 줄 뒤의 마지막 행 지우기
+    assert.equal(run('a\n\nc', { kind: 'deleteRow', at: 2 }), 'a\n\n');
+    assert.deepEqual(values(run('a\n\n\nd', { kind: 'deleteRow', at: 3 })), [['a'], [''], ['']]);
+    // 빈 줄을 맨 끝으로 옮기기, 마지막 행을 맨 위로 옮기기
+    assert.deepEqual(values(run('a\n\nc', { kind: 'moveRows', from: 1, count: 1, to: 3 })), [['a'], ['c'], ['']]);
+    assert.deepEqual(values(run('a\n\nc', { kind: 'moveRows', from: 2, count: 1, to: 0 })), [['c'], ['a'], ['']]);
+    // 열 지우기로 셀 하나뿐인 마지막 행이 빔, 모든 열 지우기, 남은 셀 하나가 빈 값
+    assert.deepEqual(values(run('a,b\nc', { kind: 'deleteCol', at: 0 })), [['b'], ['']]);
+    assert.deepEqual(values(run('a,b\nc,d', { kind: 'deleteCol', at: [0, 1] })), [[''], ['']]);
+    assert.deepEqual(values(run('a,b\nx,', { kind: 'deleteCol', at: 0 })), [['b'], ['']]);
+    // 줄바꿈이 있는 파일은 예전과 같다
+    assert.equal(run('name\nAAA\nBBB\n', set(2, 0, '')), 'name\nAAA\n\n');
+});
+
+test('표 화면이 보낸 작업은 모양이 맞을 때만 받는다', () => {
+    const { validOp } = require('../out/csv');
+    const good = [
+        { kind: 'setCells', cells: [[0, 1, 'x'], [2, 3, 'y', 'old']] },
+        { kind: 'paste', row: 1, col: 0, text: 'a\tb', fill: [[1, 0, 2, 1]] },
+        { kind: 'insertRow', at: -1 },
+        { kind: 'insertCol', at: 3, count: 2 },
+        { kind: 'deleteRow', at: [1, 5] },
+        { kind: 'deleteCol', at: 0 },
+        { kind: 'moveRows', from: 2, count: 3, to: 0 },
+    ];
+    for (const op of good) assert.equal(validOp(op), op, JSON.stringify(op));
+    const bad = [
+        null,
+        'x',
+        { kind: 'nope' },
+        { kind: 'insertRow', at: Number.NaN },
+        { kind: 'insertRow', at: 1, count: 1.5 },
+        { kind: 'insertRow', at: -2 },
+        { kind: 'paste', row: '1', col: 0, text: 'a' },
+        { kind: 'setCells', cells: [[2000000000, 0, 'x']] },
+        { kind: 'setCells', cells: [[0, 0, 5]] },
+        { kind: 'deleteRow', at: [1, -1] },
+        { kind: 'moveCols', from: 0, count: 0, to: 2 },
+        { kind: 'paste', row: 0, col: 0, text: 'a', fill: [[2, 0, 1, 0]] },
+    ];
+    for (const op of bad) assert.equal(validOp(op), undefined, JSON.stringify(op));
+});
+
+test('셀의 바꾸기 전 값이 지금 파일과 다르면 오래된 작업이다', () => {
+    const { staleCells } = require('../out/csv');
+    const doc = parseCsv('a,b\nc,d\n', ',');
+    assert.equal(staleCells(doc, [[1, 0, 'x', 'c']]), false);
+    assert.equal(staleCells(doc, [[1, 0, 'x']]), false);
+    assert.equal(staleCells(doc, [[1, 0, 'x', 'b']]), true);
+    // 표 밖 셀의 바꾸기 전 값은 빈 값이다
+    assert.equal(staleCells(doc, [[5, 0, 'x', '']]), false);
+});
+
+test('달라진 행 구간만 찾는다', () => {
+    const { rowsSplice } = require('../out/csv');
+    const apply = (prev, s) => prev.slice(0, s.start).concat(s.rows, prev.slice(s.start + s.del));
+    const check = (prev, next, expect) => {
+        const s = rowsSplice(prev, next);
+        assert.deepEqual(apply(prev, s), next);
+        if (expect) assert.deepEqual([s.start, s.del, s.rows.length], expect);
+    };
+    const t = [['h'], ['a'], ['b'], ['c']];
+    check(t, t, [4, 0, 0]);
+    check(t, [['h'], ['a'], ['X'], ['c']], [2, 1, 1]);
+    check(t, [['h'], ['a'], ['n'], ['b'], ['c']], [2, 0, 1]);
+    check(t, [['h'], ['b'], ['c']], [1, 1, 0]);
+    check(t, [], [0, 4, 0]);
+    check([], t, [0, 0, 4]);
+    check([['x'], ['x'], ['x']], [['x'], ['x']], [2, 1, 0]);
+    check([['a', '']], [['a']], [0, 1, 1]);
+    let seed = 1;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const table = () => Array.from({ length: Math.floor(rnd() * 6) }, () => [String(Math.floor(rnd() * 3))]);
+    for (let k = 0; k < 2000; k++) check(table(), table());
+});
+
+test('시험용 applyEdits는 VS Code처럼 겹치는 바꾸기를 거절한다', () => {
+    assert.throws(() => applyEdits('abcdef', [{ start: 1, end: 4, text: 'x' }, { start: 3, end: 5, text: 'y' }]), /Overlapping/);
+    assert.equal(applyEdits('abc', [{ start: 1, end: 1, text: 'x' }, { start: 1, end: 2, text: 'y' }]), 'axyc');
+});
+
+test('파일 끝까지 닫히지 않은 따옴표를 알려 준다', () => {
+    assert.equal(parseCsv('"open\ntail', ',').openQuote, true);
+    assert.equal(parseCsv('"a",b\n', ',').openQuote, false);
+});
+
 test('TSV는 탭으로 나눈다', () => {
     assert.deepEqual(values('a\tb,c\n', '\t'), [['a', 'b,c']]);
     assert.equal(run('a\tb\n', set(0, 1, 'x\ty'), '\t'), 'a\t"x\ty"\n');
