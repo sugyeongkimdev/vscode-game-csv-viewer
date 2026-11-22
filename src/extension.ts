@@ -14,22 +14,17 @@ export function activate(context: vscode.ExtensionContext): void {
     // 텍스트 버튼으로 일부러 글자 편집기로 바꾼 파일과 그 때. 아래 "CSV를 표로 열기"가 곧바로 다시 표로 바꾸지 않게 비켜 간다.
     const wantText = new Map<string, number>();
     // 탐색기나 편집기 제목 줄에서 누르면 그 파일 주소가 넘어온다. 명령 팔레트에서는 지금 탭의 파일을 쓴다.
-    // 지금 탭이 그 파일이면 새 탭을 열지 않고 그 탭을 바꿔 끼운다(2026-11-21 "탭이 하나 더 생기는데 보기 귀찮다").
+    // 그 파일이 어느 그룹의 지금 탭이면 새 탭을 열지 않고 그 탭을 바꿔 끼운다(2026-11-21 "탭이 하나 더 생기는데 보기 귀찮다").
     const openWith = (viewType: string) => async (uri?: vscode.Uri) => {
-        const active = tabUri(vscode.window.tabGroups.activeTabGroup.activeTab);
-        const target = uri ?? active;
+        const groups = vscode.window.tabGroups;
+        const target = uri ?? tabUri(groups.activeTabGroup.activeTab);
         if (!target) return;
         // 표로는 CSV, TSV만 연다. VS Code는 편집기 이름을 집어 주면 파일 이름을 보지 않아서, 다른 파일도 쉼표 표로 열고 고칠 수 있었다.
         if (viewType !== 'default' && !isCsv(target)) return;
         if (viewType === 'default') wantText.set(target.toString(), Date.now());
-        if (active?.toString() === target.toString()) {
-            try {
-                // VS Code 안쪽 명령(Reopen Editor With가 쓰는 길). 저장 안 한 내용도 묻지 않고 그대로 넘긴다.
-                return await vscode.commands.executeCommand('reopenActiveEditorWith', viewType);
-            } catch {
-                // 공개 API가 아니라서 VS Code가 이 명령을 없애면 예전처럼 새 탭으로 연다.
-            }
-        }
+        // 그 파일을 보여 주는 탭(지금 그룹 먼저). Cursor는 오른쪽 에이전트 창도 탭 그룹이라, 지금 그룹이 버튼을 누른 그룹과 다를 수 있다.
+        const tab = [groups.activeTabGroup, ...groups.all].map((g) => g.activeTab).find((t) => tabUri(t)?.toString() === target.toString());
+        if (tab) return reopen(tab, viewType);
         return vscode.commands.executeCommand('vscode.openWith', target, viewType);
     };
 
@@ -70,8 +65,7 @@ export function activate(context: vscode.ExtensionContext): void {
             if (same.some(isTable) || same.filter((t) => t.input instanceof vscode.TabInputText).length > 1) continue;
             const table = vscode.workspace.getConfiguration('gameCsvViewer').get('defaultEditor') === 'table';
             if (!table && !wasTable) continue;
-            // 파일 주소를 넘기면 그 파일의 탭을 집어 바꾼다(저장 안 한 내용도 그대로). 안쪽 명령이 없어지면 글자 편집기로 둔다.
-            vscode.commands.executeCommand('reopenActiveEditorWith', CsvEditorProvider.viewType, uri).then(undefined, () => undefined);
+            reopen(tab, CsvEditorProvider.viewType).then(undefined, () => undefined);
         }
     });
 
@@ -114,6 +108,29 @@ function isTable(tab: vscode.Tab | undefined): boolean {
 function tabUri(tab: vscode.Tab | undefined): vscode.Uri | undefined {
     const input = tab?.input;
     return input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom ? input.uri : undefined;
+}
+
+// 파일 탭을 그 자리에서 다른 편집기(글자 편집기 'default' 또는 표)로 바꿔 끼운다.
+async function reopen(tab: vscode.Tab, viewType: string): Promise<void> {
+    const uri = tabUri(tab);
+    if (!uri) return;
+    try {
+        // VS Code 안쪽 명령(Reopen Editor With가 쓰는 길). 파일 주소를 넘기면 그 파일의 탭을 집고, 저장 안 한 내용도 묻지 않고 넘긴다.
+        await vscode.commands.executeCommand('reopenActiveEditorWith', viewType, uri);
+        return;
+    } catch {
+        // Cursor에는 이 명령이 없다(2026-11-22 확인). 그 탭의 그룹에 새로 열고 옛 탭을 닫는다.
+    }
+    const column = tab.group.viewColumn;
+    const wasTable = isTable(tab);
+    await vscode.commands.executeCommand('vscode.openWith', uri, viewType, { viewColumn: column, preview: tab.isPreview });
+    // 탭이 열리면 Cursor가 탭 목록을 새로 만들어 들고 있던 탭이 낡으므로, 그 그룹에서 같은 파일의 옛 종류 탭을 다시 찾는다.
+    // 미리보기 탭이었으면 새로 연 미리보기 탭이 이미 갈아 치워 없을 수 있다.
+    const old = vscode.window.tabGroups.all
+        .find((g) => g.viewColumn === column)
+        ?.tabs.find((t) => tabUri(t)?.toString() === uri.toString() && isTable(t) === wasTable);
+    // shortcut: 저장 안 한 내용이 있으면 닫을 때 저장을 물으므로 옛 탭을 남겨 탭이 둘이 된다, Cursor에 바꿔 끼우는 명령이 생기면 그것을 쓴다.
+    if (old && !old.isDirty) await vscode.window.tabGroups.close(old, true);
 }
 
 export function deactivate(): void {}

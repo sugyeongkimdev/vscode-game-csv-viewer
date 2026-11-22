@@ -2,7 +2,7 @@
   "name": "vscode-game-csv-viewer",
   "displayName": "Game CSV Viewer",
   "description": "%description%",
-  "version": "0.1.28",
+  "version": "0.1.31",
   "publisher": "sugyeongkimdev",
   "icon": "media/icon.png",
   "preview": true,
@@ -142,6 +142,12 @@
           "description": "%config.defaultEditor.description%"
         }
       }
+    },
+    "configurationDefaults": {
+      "cursor.general.pinnedTitleActions": [
+        "gameCsvViewer.openTable",
+        "gameCsvViewer.openText"
+      ]
     },
     "menus": {
       "editor/title": [
