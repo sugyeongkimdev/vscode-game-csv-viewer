@@ -6,8 +6,6 @@ Only the cells you change are rewritten, so quotes, line endings and every other
 
 > **Preview.** This extension is in early development. Please report problems on [GitHub Issues](https://github.com/sugyeongkimdev/vscode-game-csv-viewer/issues).
 
-[한국어 설명은 아래에 있습니다.](#한국어)
-
 ![Opening items.csv from the Explorer, switching it to the table view with the title bar button, scrolling, and switching back to text](media/readme/open-table.gif)
 
 ## Why Game CSV Viewer
