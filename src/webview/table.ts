@@ -147,6 +147,10 @@ let anchor: Pos = { ...sel };
 let head: Pos = { ...sel };
 /** Ctrl+클릭으로 앞서 고른 범위들 */
 let extra: Rect[] = [];
+/** 확장에 마지막으로 알린 지금 셀("행,열") */
+let reportedCell = '';
+/** 확장이 고르라고 보낸 셀(글자 편집기의 커서 자리). 표를 받기 전에 오면 처음 표를 그린 뒤에 고른다. */
+let jumpTo: Pos | null = null;
 let drag: DragMode | null = null;
 let resizing: Resize | null = null;
 let editing = false;
@@ -372,6 +376,11 @@ function render(): void {
 /** 탭을 옮겼다 와도 이어지게 지금 셀과 스크롤 자리를 웹뷰 상태에 둔다. */
 function saveState(): void {
     vscodeApi.setState({ row: sel.row, col: sel.col, top: grid.scrollTop, left: grid.scrollLeft } satisfies ViewState);
+    // 글자 편집기로 바꿀 때 이 셀 자리에 커서를 두도록, 지금 셀이 바뀌면 확장에 알린다.
+    const key = `${sel.row},${sel.col}`;
+    if (key === reportedCell) return;
+    reportedCell = key;
+    vscodeApi.postMessage({ type: 'cell', row: sel.row, col: sel.col });
 }
 
 /** 지금 스크롤 자리에서 보이는 본문 행 [start, end)와 스크롤되는 열 [c0, c1](세로 머리글의 고정 열은 빼고 센다). */
@@ -517,6 +526,15 @@ function setSelection(nextSel: Pos, nextAnchor: Pos, nextHead: Pos, nextExtra: R
 function selectCell(r: number, c: number): void {
     const p = { row: r, col: c };
     setSelection(p, p, p, [], p);
+}
+
+/** 확장이 보낸 셀(글자 편집기의 커서 자리)을 고른다. 그 행이 화면 세로 가운데쯤에 오게 스크롤한다(맨 아래에 붙지 않게). */
+function jumpToCell(p: Pos): void {
+    if (!rows.length) return;
+    if (layoutDirty) layout();
+    const r = clamp(p.row, 0, rows.length - 1);
+    if (!(mode === 'row' && r === 0)) grid.scrollTop = (tops[r - firstBody()] ?? 0) + rowHeight(r) / 2 - (grid.clientHeight - headH()) / 2;
+    selectCell(p.row, p.col);
 }
 
 /** 지금 범위의 움직이는 끝만 옮긴다(Shift+방향키). 지금 셀과 시작 셀은 그대로다. */
@@ -1403,7 +1421,16 @@ for (const b of zoomButtons) {
 }
 
 window.addEventListener('message', (e: MessageEvent) => {
-    const m = e.data as { type?: string; rows?: string[][]; text?: Record<string, string>; mode?: unknown; view?: unknown; remeasure?: boolean; start?: number; del?: number };
+    const m = e.data as { type?: string; rows?: string[][]; text?: Record<string, string>; mode?: unknown; view?: unknown; remeasure?: boolean; start?: number; del?: number; row?: number; col?: number };
+    if (m.type === 'select') {
+        if (!Number.isInteger(m.row) || !Number.isInteger(m.col)) return;
+        jumpTo = { row: m.row!, col: m.col! };
+        if (loaded && !editing) {
+            jumpToCell(jumpTo);
+            jumpTo = null;
+        }
+        return;
+    }
     if (m.type === 'text' && m.text) {
         text = m.text;
         modeLabel.textContent = text.headerLabel;
@@ -1487,6 +1514,10 @@ function applyRows(remeasure: boolean): void {
         grid.scrollTop = saved.top ?? 0;
         grid.scrollLeft = saved.left ?? 0;
         render();
+        if (jumpTo) {
+            jumpToCell(jumpTo);
+            jumpTo = null;
+        }
     }
 }
 

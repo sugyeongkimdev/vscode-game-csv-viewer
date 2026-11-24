@@ -116,6 +116,30 @@ export function parseCsv(text: string, delimiter: string): CsvDoc {
     return { rows, values, text, openQuote };
 }
 
+/** 글자 위치가 든 셀의 [행, 열]. 나눔 글자는 앞 셀, 줄바꿈과 파일 끝 빈 줄은 앞 행의 마지막 셀로 본다. 빈 파일이면 없음. */
+export function cellAt(doc: CsvDoc, offset: number): [row: number, col: number] | undefined {
+    if (!doc.rows.length) return undefined;
+    // 행 시작 위치는 차례로 커지므로, offset 이하에서 시작하는 마지막 행을 반씩 나눠 찾는다.
+    let lo = 0;
+    let hi = doc.rows.length - 1;
+    while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (doc.rows[mid].start <= offset) lo = mid;
+        else hi = mid - 1;
+    }
+    const cells = doc.rows[lo].cells;
+    let col = 0;
+    while (col * 2 + 2 < cells.length && cells[col * 2 + 2] <= offset) col++;
+    return [lo, col];
+}
+
+/** 셀이 파일에서 시작하는 글자 위치. 그 행에 그 열이 없으면(짧은 행) 행 끝이고, 행이 없으면 없음. */
+export function cellStart(doc: CsvDoc, row: number, col: number): number | undefined {
+    const r = doc.rows[row];
+    if (!r) return undefined;
+    return col * 2 < r.cells.length ? r.cells[col * 2] : r.end;
+}
+
 /** 셀 값을 파일 글자로 바꾼다. 따옴표는 꼭 필요할 때만 붙인다(MSW는 쓸데없는 따옴표를 화면에 그대로 보여 준다). */
 export function encodeCell(value: string, delimiter: string): string {
     return /["\r\n]/.test(value) || value.includes(delimiter) ? `"${value.replace(/"/g, '""')}"` : value;

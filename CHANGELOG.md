@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.34
+
+- Cursor: the "Open as Table" and "Open as Text" buttons now show in the editor title bar and switch the tab in place.
+- Switching between the text editor and the table keeps your place: the cell under the text cursor is selected and scrolled to the middle of the table, and the selected cell's position becomes the text cursor.
+- Cursor: Ctrl+Z in the table no longer does nothing when Cursor still treats the agent pane as the active editor group.
+
 ## 0.1 (first preview)
 
 First public preview.

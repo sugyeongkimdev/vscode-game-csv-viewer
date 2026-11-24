@@ -15,3 +15,4 @@ build.cmd
 *.vsix
 docs/**
 media/readme/**
+.github/**

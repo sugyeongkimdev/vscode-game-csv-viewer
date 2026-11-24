@@ -2,7 +2,7 @@
   "name": "vscode-game-csv-viewer",
   "displayName": "Game CSV Viewer",
   "description": "%description%",
-  "version": "0.1.31",
+  "version": "0.1.34",
   "publisher": "sugyeongkimdev",
   "icon": "media/icon.png",
   "preview": true,

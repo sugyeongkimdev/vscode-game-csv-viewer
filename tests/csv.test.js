@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { parseCsv, encodeCell, editsFor, applyEdits, pasteCells } = require('../out/csv');
+const { parseCsv, encodeCell, editsFor, applyEdits, pasteCells, cellAt, cellStart } = require('../out/csv');
 const { pickLang, uiText } = require('../out/i18n');
 
 // 작업 하나를 적용한 결과 글자를 돌려준다.
@@ -279,6 +279,22 @@ test('어떤 값을 써도 다시 읽으면 같은 값이 나온다', () => {
             assert.deepEqual(values(text, delimiter), [['x', v, 'y']], JSON.stringify({ v, delimiter }));
         }
     }
+});
+
+test('글자 위치와 셀 번호를 서로 바꾼다(글자 편집기와 표를 오갈 때)', () => {
+    const doc = parseCsv('a,"b\nc",d\n\nxy,z\n', ',');
+    // a=0 쉼표=1 따옴표 셀=2~6 쉼표=7 d=8 줄바꿈=9 / 빈 줄=10 / xy=11~12 쉼표=13 z=14 줄바꿈=15 / 파일 끝=16
+    const at = (o) => cellAt(doc, o);
+    assert.deepEqual([0, 1, 2, 4, 7, 8, 9].map(at), [[0, 0], [0, 0], [0, 1], [0, 1], [0, 1], [0, 2], [0, 2]]);
+    assert.deepEqual([10, 11, 13, 14, 15, 16].map(at), [[1, 0], [2, 0], [2, 0], [2, 1], [2, 1], [2, 1]]);
+    assert.equal(cellAt(parseCsv('', ','), 0), undefined);
+    assert.deepEqual([[0, 0], [0, 1], [0, 2], [1, 0], [2, 1]].map(([r, c]) => cellStart(doc, r, c)), [0, 2, 8, 10, 14]);
+    // 짧은 행에 없는 열이면 그 행 끝, 없는 행이면 없음
+    assert.equal(cellStart(doc, 1, 3), 10);
+    assert.equal(cellStart(doc, 2, 5), 15);
+    assert.equal(cellStart(doc, 3, 0), undefined);
+    // 셀 시작 자리는 다시 그 셀로 돌아온다
+    for (const [r, c] of [[0, 0], [0, 1], [0, 2], [1, 0], [2, 0], [2, 1]]) assert.deepEqual(at(cellStart(doc, r, c)), [r, c]);
 });
 
 test('언어는 설정이 먼저이고, 자동이면 VS Code 표시 언어가 한국어일 때만 한국어다', () => {

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CsvDoc, CsvOp, editsFor, parseCsv, rowsSplice, staleCells, validOp } from './csv';
+import { cellAt, cellStart, CsvDoc, CsvOp, editsFor, parseCsv, rowsSplice, staleCells, validOp } from './csv';
 import { Lang, pickLang, uiText } from './i18n';
 import { recordSizes, sameSizes, sizesFollow, sanitizeView, SizeHistory, takeSizeStep, textPrint, ViewSettings } from './view';
 
@@ -20,6 +20,9 @@ function currentHeaderMode(): HeaderMode {
         return 'row';
     }
 }
+
+/** 파일 이름으로 나눔 글자를 정한다. TSV는 탭, 나머지는 쉼표다. */
+const delimiterOf = (document: vscode.TextDocument): string => (/\.tsv$/i.test(document.uri.path) ? '\t' : ',');
 
 /** 표 화면이 보낸 번호 목록에서 정수만 작은 것부터 남긴다. */
 function ints(v: unknown): number[] {
@@ -54,6 +57,12 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
     /** 파일마다 열 너비, 행 높이 되돌리기 기록(view.ts). 탭을 글자 편집기와 바꿔 끼워도 남게 확장에 둔다. */
     private readonly sizeHistory = new Map<string, SizeHistory>();
 
+    /** 파일마다 표 화면이 마지막으로 알린 지금 셀 [행, 열]. 글자 편집기로 바꿀 때 커서를 둘 자리다. */
+    private readonly lastCell = new Map<string, [number, number]>();
+
+    /** 파일마다 다음에 뜨는 표 화면이 고를 셀 [행, 열]. 글자 편집기에서 표로 바꿀 때 커서 자리를 넘긴다. */
+    private readonly openAt = new Map<string, [number, number]>();
+
     /** memory: 파일마다 보기 설정을 기억하는 확장 저장소(context.globalState) */
     constructor(
         private readonly extensionUri: vscode.Uri,
@@ -62,6 +71,18 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
 
     runMenu(make: OpAtSel): void {
         this.runAtMenuCell?.(make);
+    }
+
+    /** 글자 편집기의 커서 자리(글자 위치)가 든 셀을, 이 파일의 다음 표 화면이 뜰 때 고르게 한다. */
+    selectOnOpen(document: vscode.TextDocument, offset: number): void {
+        const cell = cellAt(parseCsv(document.getText(), delimiterOf(document)), offset);
+        if (cell) this.openAt.set(document.uri.toString(), cell);
+    }
+
+    /** 이 파일의 표 화면에서 마지막으로 고른 셀이 시작하는 글자 위치. 고른 적이 없거나 그 행이 없어졌으면 없음. */
+    lastCellOffset(document: vscode.TextDocument): number | undefined {
+        const cell = this.lastCell.get(document.uri.toString());
+        return cell && cellStart(parseCsv(document.getText(), delimiterOf(document)), ...cell);
     }
 
     /** 파일의 크기 되돌리기 기록. 없으면 만든다. */
@@ -96,7 +117,7 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
         };
         webview.html = this.html(webview);
 
-        const delimiter = /\.tsv$/i.test(document.uri.path) ? '\t' : ',';
+        const delimiter = delimiterOf(document);
         let cache: { version: number; doc: CsvDoc } | undefined;
         const current = (): CsvDoc => {
             if (cache?.version !== document.version) cache = { version: document.version, doc: parseCsv(document.getText(), delimiter) };
@@ -196,10 +217,25 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             void webview.postMessage({ type: 'view', view: next });
             await this.memory.update(viewKey, next);
         };
+        // 이 표를 활성 편집기로 만든다(최대 1초 기다림). 키를 누른 곳이 이 표여도 Cursor는 오른쪽 에이전트 창 그룹을
+        // 활성으로 남겨 둘 수 있어서, 그대로 두면 Ctrl+Z가 아무것도 하지 않았다(2026-11-24 재현).
+        const activate = (): Promise<boolean> => {
+            if (panel.active) return Promise.resolve(true);
+            return new Promise((resolve) => {
+                const done = (): void => {
+                    sub.dispose();
+                    clearTimeout(wait);
+                    resolve(panel.active);
+                };
+                const sub = panel.onDidChangeViewState(() => panel.active && done());
+                const wait = setTimeout(done, 1000);
+                panel.reveal(panel.viewColumn, false);
+            });
+        };
         // Ctrl+Z, Ctrl+Y: 크기 차례면 크기를 되돌리고, 아니면 VS Code 되돌리기(글자)를 부른다.
         const undoRedo = async (dir: 'undo' | 'redo'): Promise<void> => {
-            // 작업 줄에 걸린 사이 다른 탭으로 옮겼으면 하지 않는다. VS Code 되돌리기는 앞에 있는 편집기로 가서 다른 파일을 되돌린다.
-            if (!panel.active) return;
+            // VS Code 되돌리기는 활성 편집기로 간다. 이 표를 활성으로 만들지 못하면 다른 파일을 되돌릴 수 있으니 하지 않는다.
+            if (!(await activate())) return;
             const step = takeSizeStep(history, dir, textPrint(document.getText()));
             if (!step) {
                 // 다시 하기는 다시 할 글자 고침이 남아 있을 때만 부른다. 되돌린 뒤 크기를 바꿨으면 그 고침은 버려진 것이다.
@@ -230,6 +266,10 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
                     sendText();
                     sendMode();
                     void webview.postMessage({ type: 'view', view: sanitizeView(this.memory.get(viewKey)) });
+                    // 글자 편집기에서 바꿔 끼운 표면 그 커서 자리 셀을 고르게 한다(표 화면은 표를 받은 뒤에 고른다).
+                    const at = this.openAt.get(document.uri.toString());
+                    this.openAt.delete(document.uri.toString());
+                    if (at) void webview.postMessage({ type: 'select', row: at[0], col: at[1] });
                     send(true);
                     // 파일 끝까지 닫히지 않은 따옴표가 있으면 끝에 붙인 행, 열이 그 셀 안으로 들어간다. 한 번 알린다.
                     if (current().openQuote && !warnedQuote) {
@@ -270,6 +310,8 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
                     const op = validOp(m.op);
                     if (op) run(op);
                     else send(true);
+                } else if (m.type === 'cell') {
+                    if (Number.isInteger(m.row) && Number.isInteger(m.col) && m.row >= 0 && m.col >= 0) this.lastCell.set(document.uri.toString(), [m.row, m.col]);
                 } else if (m.type === 'menu') {
                     const rows = ints(m.rows);
                     const cols = ints(m.cols);

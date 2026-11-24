@@ -24,8 +24,22 @@ export function activate(context: vscode.ExtensionContext): void {
         if (viewType === 'default') wantText.set(target.toString(), Date.now());
         // 그 파일을 보여 주는 탭(지금 그룹 먼저). Cursor는 오른쪽 에이전트 창도 탭 그룹이라, 지금 그룹이 버튼을 누른 그룹과 다를 수 있다.
         const tab = [groups.activeTabGroup, ...groups.all].map((g) => g.activeTab).find((t) => tabUri(t)?.toString() === target.toString());
-        if (tab) return reopen(tab, viewType);
-        return vscode.commands.executeCommand('vscode.openWith', target, viewType);
+        if (!tab) return vscode.commands.executeCommand('vscode.openWith', target, viewType);
+        // 바꿔 끼울 때 보던 자리를 이어 간다: 글자의 커서가 든 셀을 표에서 고르고, 표의 지금 셀 시작에 글자 커서를 둔다(2026-11-23 사용자 요청).
+        const column = tab.group.viewColumn;
+        const fromTable = isTable(tab);
+        if (!fromTable) {
+            const ed = vscode.window.visibleTextEditors.find((e) => e.viewColumn === column && e.document.uri.toString() === target.toString());
+            if (ed) provider.selectOnOpen(ed.document, ed.document.offsetAt(ed.selection.active));
+        }
+        await reopen(tab, viewType);
+        if (!fromTable || viewType !== 'default') return;
+        const document = await vscode.workspace.openTextDocument(target);
+        const offset = provider.lastCellOffset(document);
+        if (offset === undefined) return;
+        const at = document.positionAt(offset);
+        // 바꿔 끼운 글자 탭을 다시 앞에 내며 커서를 옮긴다. 새 탭은 열지 않는다.
+        await vscode.window.showTextDocument(document, { viewColumn: column, preview: tab.isPreview, selection: new vscode.Range(at, at) });
     };
 
     // CSV가 글자 편집기로 새로 열리면 표로 바꿔 끼울지 정한다(2026-11-21 사용자 지시).
